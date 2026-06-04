@@ -17,11 +17,11 @@ PRICES: dict[str, dict[str, Decimal]] = {
     # 来源:https://help.aliyun.com/zh/model-studio/qwen-model-billing-notice (核对日期:2026-06-04)
     # 缓存命中(隐式缓存)= 输入标准价的 20%,来源:
     #   https://help.aliyun.com/zh/model-studio/context-cache
-    # qwen-plus 输出官方刊例为 ¥2/M(¥0.002/千 token),计划占位值 8.0 有误。
-    # 缓存命中计划占位值 0.32 有误,官方隐式缓存为输入价 ×20% = ¥0.16/M。
+    # qwen-plus 实时调用输出 ¥0.0004/千 token = ¥0.4/M(2024-09-19 生效刊例,
+    # 2026-06-04 复核;勿与 batch 价混淆)。缓存命中 = 隐式缓存,输入价 ×20% = ¥0.16/M。
     "qwen-plus": {
         "input": Decimal("0.8"),
-        "output": Decimal("2"),
+        "output": Decimal("0.4"),
         "cached": Decimal("0.16"),
     },
 }
