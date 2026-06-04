@@ -1,11 +1,16 @@
+import os
+
 import httpx
 import pytest
 import respx
 
 import anvil_gateway.client as client_mod
 from anvil_gateway import chat, configure
-from anvil_gateway.ledger import SqliteLedger
 from anvil_gateway.router import Cooldown
+
+TEST_DB_URL = os.environ.get(
+    "ANVIL_DATABASE_URL", "postgresql+asyncpg://anvil:anvil@localhost:5433/anvil"
+)
 
 DS_URL = "https://api.deepseek.com/v1/chat/completions"
 
@@ -27,12 +32,11 @@ SSE = (
 
 
 @pytest.fixture(autouse=True)
-def env_and_ledger(tmp_path, monkeypatch):
+async def env_and_ledger(monkeypatch, pg_ledger):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "k1")
-    path = str(tmp_path / "ledger.sqlite3")
-    configure(ledger_path=path, retry_base_delay=0)
+    configure(database_url=TEST_DB_URL, retry_base_delay=0)
     client_mod._cooldown = Cooldown()
-    yield path
+    yield pg_ledger
 
 
 @respx.mock
@@ -54,7 +58,7 @@ async def test_stream_yields_deltas_and_final_usage(env_and_ledger):
     assert len(finals) == 1
     assert finals[0].usage.cached_tokens == 8
     assert finals[0].usage.ttft_ms is not None
-    assert SqliteLedger(env_and_ledger).count() == 1
+    assert await env_and_ledger.count() == 1
 
 
 @respx.mock

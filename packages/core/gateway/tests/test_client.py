@@ -1,3 +1,5 @@
+import os
+
 import httpx
 import pytest
 import respx
@@ -5,8 +7,11 @@ import respx
 import anvil_gateway.client as client_mod
 from anvil_gateway import chat, configure
 from anvil_gateway.errors import AllProvidersFailedError, FatalRequestError
-from anvil_gateway.ledger import SqliteLedger
 from anvil_gateway.router import Cooldown
+
+TEST_DB_URL = os.environ.get(
+    "ANVIL_DATABASE_URL", "postgresql+asyncpg://anvil:anvil@localhost:5433/anvil"
+)
 
 DS_URL = "https://api.deepseek.com/v1/chat/completions"
 QW_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
@@ -37,13 +42,12 @@ MSGS = [{"role": "user", "content": "hi"}]
 
 
 @pytest.fixture(autouse=True)
-def env_and_ledger(tmp_path, monkeypatch):
+async def env_and_ledger(monkeypatch, pg_ledger):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "k1")
     monkeypatch.setenv("DASHSCOPE_API_KEY", "k2")
-    path = str(tmp_path / "ledger.sqlite3")
-    configure(ledger_path=path, retry_base_delay=0)
+    configure(database_url=TEST_DB_URL, retry_base_delay=0)
     client_mod._cooldown = Cooldown()
-    yield path
+    yield pg_ledger
 
 
 @respx.mock
@@ -52,8 +56,7 @@ async def test_happy_path_records_usage(env_and_ledger):
     resp = await chat("deepseek-chat", MSGS, session_id="s-1")
     assert resp.content == "你好" and resp.provider == "deepseek"
     assert resp.usage.cached_tokens == 4 and resp.usage.cache_hit_rate == 0.4
-    ledger = SqliteLedger(env_and_ledger)
-    assert ledger.count() == 1
+    assert await env_and_ledger.count() == 1
 
 
 @respx.mock

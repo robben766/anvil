@@ -7,6 +7,21 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: anvil
+          POSTGRES_PASSWORD: anvil
+          POSTGRES_DB: anvil
+        ports: ["5433:5432"]
+        options: >-
+          --health-cmd "pg_isready -U anvil"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      ANVIL_DATABASE_URL: postgresql+asyncpg://anvil:anvil@localhost:5433/anvil
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
@@ -14,4 +29,5 @@ jobs:
           python-version: "3.12"
       - run: uv sync --all-packages
       - run: uv run ruff check .
+      - run: cd packages/core/gateway && uv run alembic upgrade head
       - run: uv run pytest -m "not live" -q

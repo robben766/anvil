@@ -5,5 +5,4 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 dist/
-*.sqlite3
 infra/data/

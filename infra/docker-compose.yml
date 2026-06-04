@@ -21,3 +21,14 @@ services:
       NEXTAUTH_SECRET: local-dev-secret-change-me
       SALT: local-dev-salt-change-me
       TELEMETRY_ENABLED: "false"
+
+  anvil-postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: anvil
+      POSTGRES_PASSWORD: anvil
+      POSTGRES_DB: anvil
+    ports: ["5433:5432"]
+    volumes:
+      - ./data/anvil-pg:/var/lib/postgresql/data

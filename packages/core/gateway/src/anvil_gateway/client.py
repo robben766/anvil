@@ -20,7 +20,7 @@ from anvil_gateway.errors import (
     RetryableError,
     classify_status,
 )
-from anvil_gateway.ledger import SqliteLedger
+from anvil_gateway.ledger import PostgresLedger
 from anvil_gateway.router import MODEL_PROVIDER, Cooldown, call_with_retry, resolve
 from anvil_gateway.types import ChatChunk, ChatResponse, Message
 
@@ -31,24 +31,24 @@ _ADAPTERS: dict[str, OpenAICompatAdapter] = {
 }
 _cooldown = Cooldown()
 _config: dict[str, Any] = {
-    "ledger_path": os.environ.get("ANVIL_LEDGER_PATH", "anvil_ledger.sqlite3"),
+    "database_url": os.environ.get("ANVIL_DATABASE_URL", "postgresql+asyncpg://anvil:anvil@localhost:5433/anvil"),
     "timeout": 60.0,
     "retry_base_delay": 0.5,
 }
-_ledger: SqliteLedger | None = None
+_ledger: PostgresLedger | None = None
 
 
 def configure(**kwargs: Any) -> None:
-    """覆盖运行配置(ledger_path / timeout / retry_base_delay);重置 ledger 单例。"""
+    """覆盖运行配置(database_url / timeout / retry_base_delay);重置 ledger 单例。"""
     global _ledger
     _config.update(kwargs)
     _ledger = None
 
 
-def _get_ledger() -> SqliteLedger:
+def _get_ledger() -> PostgresLedger:
     global _ledger
     if _ledger is None:
-        _ledger = SqliteLedger(_config["ledger_path"])
+        _ledger = PostgresLedger(_config["database_url"])
     return _ledger
 
 
@@ -67,8 +67,8 @@ async def _call_one(
         data = await adapter.send(client, api_key, payload)
     latency_ms = int((time.perf_counter() - start) * 1000)
     usage = adapter.parse_usage(data, latency_ms=latency_ms, session_id=session_id)
-    # TODO: sqlite 同步写会短暂阻塞 event loop;低频可接受,生产化前改 run_in_executor。
-    _get_ledger().insert(usage)
+    # NOTE: PG 写入为 async,不再阻塞 event loop
+    await _get_ledger().insert(usage)
     return adapter.parse_response(data, usage)
 
 
@@ -110,7 +110,7 @@ async def _stream_one(
                         usage = adapter.parse_usage(
                             chunk, latency_ms=latency_ms, ttft_ms=ttft_ms, session_id=session_id
                         )
-                        _get_ledger().insert(usage)
+                        await _get_ledger().insert(usage)
                         # usage 末块按约定为流的最后一个数据块,finish_reason 统一记 "stop"
                         yield ChatChunk(delta="", finish_reason="stop", usage=usage)
                         continue
