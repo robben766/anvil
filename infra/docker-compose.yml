@@ -29,6 +29,6 @@ services:
       POSTGRES_USER: anvil
       POSTGRES_PASSWORD: anvil
       POSTGRES_DB: anvil
-    ports: ["5433:5432"]
+    ports: ["5434:5432"]
     volumes:
       - ./data/anvil-pg:/var/lib/postgresql/data

@@ -10,7 +10,7 @@ from anvil_gateway.db import Base
 target_metadata = Base.metadata
 
 DATABASE_URL = os.environ.get(
-    "ANVIL_DATABASE_URL", "postgresql+asyncpg://anvil:anvil@localhost:5433/anvil"
+    "ANVIL_DATABASE_URL", "postgresql+asyncpg://anvil:anvil@localhost:5434/anvil"
 )
 
 

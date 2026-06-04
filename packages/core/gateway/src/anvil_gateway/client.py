@@ -31,7 +31,7 @@ _ADAPTERS: dict[str, OpenAICompatAdapter] = {
 }
 _cooldown = Cooldown()
 _config: dict[str, Any] = {
-    "database_url": os.environ.get("ANVIL_DATABASE_URL", "postgresql+asyncpg://anvil:anvil@localhost:5433/anvil"),
+    "database_url": os.environ.get("ANVIL_DATABASE_URL", "postgresql+asyncpg://anvil:anvil@localhost:5434/anvil"),
     "timeout": 60.0,
     "retry_base_delay": 0.5,
 }

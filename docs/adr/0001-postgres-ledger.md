@@ -14,7 +14,7 @@ P0 设计文档初版将记账存储定为 SQLite 单文件起步(零运维,经 
 - 记账层采用 **PostgreSQL + SQLAlchemy(asyncio)+ Alembic**
 - ORM 模型定义在 `db.py`,schema 变更一律走 Alembic migration
 - 使用 `NullPool` 简化连接池生命周期(低 QPS 可接受;高 QPS 时可换连接池)
-- 测试层同样使用真实 PostgreSQL:本地通过 `infra/docker-compose.yml` 的 `anvil-postgres` 服务(端口 5433),CI 通过 GitHub Actions service container
+- 测试层同样使用真实 PostgreSQL:本地通过 `infra/docker-compose.yml` 的 `anvil-postgres` 服务(端口 5434),CI 通过 GitHub Actions service container
 
 ## Consequences
 

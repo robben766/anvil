@@ -5,7 +5,7 @@ import pytest
 from anvil_gateway.ledger import PostgresLedger
 
 TEST_DB_URL = os.environ.get(
-    "ANVIL_DATABASE_URL", "postgresql+asyncpg://anvil:anvil@localhost:5433/anvil"
+    "ANVIL_DATABASE_URL", "postgresql+asyncpg://anvil:anvil@localhost:5434/anvil"
 )
 
 

@@ -10,7 +10,7 @@ from anvil_gateway.errors import AllProvidersFailedError, FatalRequestError
 from anvil_gateway.router import Cooldown
 
 TEST_DB_URL = os.environ.get(
-    "ANVIL_DATABASE_URL", "postgresql+asyncpg://anvil:anvil@localhost:5433/anvil"
+    "ANVIL_DATABASE_URL", "postgresql+asyncpg://anvil:anvil@localhost:5434/anvil"
 )
 
 DS_URL = "https://api.deepseek.com/v1/chat/completions"
