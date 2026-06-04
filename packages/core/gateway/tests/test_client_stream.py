@@ -55,3 +55,15 @@ async def test_stream_yields_deltas_and_final_usage(env_and_ledger):
     assert finals[0].usage.cached_tokens == 8
     assert finals[0].usage.ttft_ms is not None
     assert SqliteLedger(env_and_ledger).count() == 1
+
+
+@respx.mock
+async def test_stream_transport_error_is_classified(env_and_ledger):
+    respx.post(DS_URL).mock(side_effect=httpx.ReadError("connection lost"))
+    from anvil_gateway.errors import RetryableError
+
+    with pytest.raises(RetryableError):
+        async for _ in await chat(
+            "deepseek-chat", [{"role": "user", "content": "hi"}], stream=True
+        ):
+            pass

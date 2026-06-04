@@ -85,42 +85,49 @@ async def _stream_one(
     payload["stream_options"] = {"include_usage": True}
     start = time.perf_counter()
     ttft_ms: int | None = None
-    async with httpx.AsyncClient(timeout=_config["timeout"]) as client:
-        async with client.stream(
-            "POST",
-            f"{adapter.base_url}/chat/completions",
-            json=payload,
-            headers={"Authorization": f"Bearer {api_key}"},
-        ) as resp:
-            if resp.status_code != 200:
-                body = (await resp.aread())[:200]
-                raise classify_status(resp.status_code)(
-                    f"{adapter.provider} HTTP {resp.status_code}: {body!r}"
-                )
-            async for line in resp.aiter_lines():
-                if not line.startswith("data: "):
-                    continue
-                raw = line[len("data: "):]
-                if raw == "[DONE]":
-                    break
-                chunk = json.loads(raw)
-                if chunk.get("usage"):
-                    latency_ms = int((time.perf_counter() - start) * 1000)
-                    usage = adapter.parse_usage(
-                        chunk, latency_ms=latency_ms, ttft_ms=ttft_ms, session_id=session_id
+    try:
+        async with httpx.AsyncClient(timeout=_config["timeout"]) as client:
+            async with client.stream(
+                "POST",
+                f"{adapter.base_url}/chat/completions",
+                json=payload,
+                headers={"Authorization": f"Bearer {api_key}"},
+            ) as resp:
+                if resp.status_code != 200:
+                    body = (await resp.aread())[:200]
+                    raise classify_status(resp.status_code)(
+                        f"{adapter.provider} HTTP {resp.status_code}: {body!r}"
                     )
-                    _get_ledger().insert(usage)
-                    yield ChatChunk(delta="", finish_reason="stop", usage=usage)
-                    continue
-                choices = chunk.get("choices") or []
-                if not choices:
-                    continue
-                delta = (choices[0].get("delta") or {}).get("content") or ""
-                if delta and ttft_ms is None:
-                    ttft_ms = int((time.perf_counter() - start) * 1000)
-                finish = choices[0].get("finish_reason")
-                if delta or finish:
-                    yield ChatChunk(delta=delta, finish_reason=finish)
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    raw = line[len("data: "):]
+                    if raw == "[DONE]":
+                        break
+                    chunk = json.loads(raw)
+                    if chunk.get("usage"):
+                        latency_ms = int((time.perf_counter() - start) * 1000)
+                        usage = adapter.parse_usage(
+                            chunk, latency_ms=latency_ms, ttft_ms=ttft_ms, session_id=session_id
+                        )
+                        _get_ledger().insert(usage)
+                        # usage 末块按约定为流的最后一个数据块,finish_reason 统一记 "stop"
+                        yield ChatChunk(delta="", finish_reason="stop", usage=usage)
+                        continue
+                    choices = chunk.get("choices") or []
+                    if not choices:
+                        continue
+                    delta = (choices[0].get("delta") or {}).get("content") or ""
+                    if delta and ttft_ms is None:
+                        ttft_ms = int((time.perf_counter() - start) * 1000)
+                    finish = choices[0].get("finish_reason")
+                    if delta or finish:
+                        yield ChatChunk(delta=delta, finish_reason=finish)
+    except httpx.TimeoutException as e:
+        raise RetryableError(f"{adapter.provider} stream timeout: {e}") from e
+    except httpx.TransportError as e:
+        # NOTE: 流中途断开无法续传,统一归类为 RetryableError,由调用方决定是否整体重发
+        raise RetryableError(f"{adapter.provider} stream transport: {e}") from e
 
 
 async def chat(
