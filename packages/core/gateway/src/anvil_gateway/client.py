@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import os
 import time
+from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
@@ -16,10 +18,11 @@ from anvil_gateway.errors import (
     FatalAuthError,
     FatalRequestError,
     RetryableError,
+    classify_status,
 )
 from anvil_gateway.ledger import SqliteLedger
 from anvil_gateway.router import MODEL_PROVIDER, Cooldown, call_with_retry, resolve
-from anvil_gateway.types import ChatResponse, Message
+from anvil_gateway.types import ChatChunk, ChatResponse, Message
 
 # NOTE: 模块级单例(进程内)——多产品共享同一配置/冷却/账本;需要隔离时再引入 Gateway 类。
 _ADAPTERS: dict[str, OpenAICompatAdapter] = {
@@ -69,22 +72,82 @@ async def _call_one(
     return adapter.parse_response(data, usage)
 
 
+async def _stream_one(
+    adapter: OpenAICompatAdapter,
+    api_key: str,
+    model: str,
+    messages: list[Message],
+    params: dict[str, Any],
+    session_id: str | None,
+) -> AsyncIterator[ChatChunk]:
+    payload = adapter.build_payload(model, messages, **params)
+    payload["stream"] = True
+    payload["stream_options"] = {"include_usage": True}
+    start = time.perf_counter()
+    ttft_ms: int | None = None
+    async with httpx.AsyncClient(timeout=_config["timeout"]) as client:
+        async with client.stream(
+            "POST",
+            f"{adapter.base_url}/chat/completions",
+            json=payload,
+            headers={"Authorization": f"Bearer {api_key}"},
+        ) as resp:
+            if resp.status_code != 200:
+                body = (await resp.aread())[:200]
+                raise classify_status(resp.status_code)(
+                    f"{adapter.provider} HTTP {resp.status_code}: {body!r}"
+                )
+            async for line in resp.aiter_lines():
+                if not line.startswith("data: "):
+                    continue
+                raw = line[len("data: "):]
+                if raw == "[DONE]":
+                    break
+                chunk = json.loads(raw)
+                if chunk.get("usage"):
+                    latency_ms = int((time.perf_counter() - start) * 1000)
+                    usage = adapter.parse_usage(
+                        chunk, latency_ms=latency_ms, ttft_ms=ttft_ms, session_id=session_id
+                    )
+                    _get_ledger().insert(usage)
+                    yield ChatChunk(delta="", finish_reason="stop", usage=usage)
+                    continue
+                choices = chunk.get("choices") or []
+                if not choices:
+                    continue
+                delta = (choices[0].get("delta") or {}).get("content") or ""
+                if delta and ttft_ms is None:
+                    ttft_ms = int((time.perf_counter() - start) * 1000)
+                finish = choices[0].get("finish_reason")
+                if delta or finish:
+                    yield ChatChunk(delta=delta, finish_reason=finish)
+
+
 async def chat(
     model: str,
     messages: list[Message],
     *,
+    stream: bool = False,
     session_id: str | None = None,
     temperature: float | None = None,
     max_tokens: int | None = None,
     tools: list[dict[str, Any]] | None = None,
     response_format: dict[str, Any] | None = None,
-) -> ChatResponse:
+) -> ChatResponse | AsyncIterator[ChatChunk]:
     params = {
         "temperature": temperature,
         "max_tokens": max_tokens,
         "tools": tools,
         "response_format": response_format,
     }
+    if stream:
+        candidate = resolve(model)[0]  # 薄版:流式不做跨 provider fallback
+        provider = MODEL_PROVIDER.get(candidate)
+        if provider is None:
+            raise FatalRequestError(f"unknown model: {candidate}")
+        adapter = _ADAPTERS[provider]
+        api_key = os.environ.get(adapter.api_key_env, "")
+        return _stream_one(adapter, api_key, candidate, messages, params, session_id)
     failures: list[Exception] = []
     for candidate in resolve(model):
         provider = MODEL_PROVIDER.get(candidate)
