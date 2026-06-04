@@ -16,3 +16,9 @@ apps/(递进式四产品)
 设计文档:[docs/superpowers/specs/](docs/superpowers/specs/)
 
 > Built in public. 每个里程碑配套一篇深度文章与可运行示例(examples/)。
+
+## 进度
+
+- [x] M1 骨架 + CI + Langfuse
+- [x] M2 gateway:统一调用 / fallback / 缓存命中记账 → [examples/01-hello-gateway](examples/01-hello-gateway/)
+- [ ] M3 obs · M4 eval · M5 proxy

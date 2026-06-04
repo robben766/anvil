@@ -32,7 +32,7 @@
 | 仓库名 | `anvil` | 铁砧 = 锻造的底座;短、好记 |
 | 架构形态 | 库优先 + 薄服务壳(方案 A) | 学习密度最高;一套核心体验 SDK/Proxy 双形态 |
 | Provider | DeepSeek + DashScope | 现有可用 key;都 OpenAI 兼容;缓存 usage 字段不同,正好练适配 |
-| 记账存储 | SQLite 单文件起步 | 零运维;经 repository 接口抽象,可换 Postgres |
+| 记账存储 | PostgreSQL + SQLAlchemy(async)+ Alembic | 2026-06-04 用户决策:不用 SQLite,直接生产形态;见 ADR-0001 |
 | Langfuse | 自托管 v2(仅 Postgres) | v3 依赖 ClickHouse,较重;v2 够用 |
 | Python | 3.12(uv 管理) | 不动系统 3.11 |
 | 文章产出 | 每里程碑出公众号长文 + 小红书卡片 | 见 §8 |
@@ -91,7 +91,7 @@ gateway/
 │  └─ dashscope.py  # usage: prompt_tokens_details.cached_tokens
 ├─ router.py        # 模型别名表 + fallback 链 + 重试(指数退避)
 ├─ usage.py         # UsageRecord 归一化模型(统一缓存字段语义)
-├─ ledger.py        # 记账: SQLite(repository 接口抽象)
+├─ ledger.py        # 记账: PostgreSQL(SQLAlchemy async, Alembic 管 schema)
 ├─ errors.py        # 错误分类法(见 §4.4)
 └─ proxy/app.py     # FastAPI 薄壳: POST /v1/chat/completions(OpenAI 兼容)
 ```
@@ -160,7 +160,7 @@ eval/
   → router 解析别名/选 provider → adapter 发请求
   → 失败? errors.py 分类: RETRYABLE→退避重试→切链; FATAL→抛出
   → 成功: adapter.parse_usage() → UsageRecord 归一化
-  → ledger 落 SQLite(异步,不阻塞) + obs span 结束并导出
+  → ledger 落 PostgreSQL(异步,不阻塞) + obs span 结束并导出
   → 返回 ChatResponse / 流式 chunk(usage 在最后一个 chunk)
 Langfuse UI ← OTLP ← exporter(批量后台发送)
 ```
@@ -176,13 +176,14 @@ Langfuse UI ← OTLP ← exporter(批量后台发送)
 - **单元测试**:adapter 用 respx mock HTTP;router/errors/usage 纯逻辑直接测;eval 指标用手算样例对照
 - **live 冒烟**:`@pytest.mark.live` 真实调两家 API(各 1 次,最小 token),本地手动跑,CI 跳过
 - **CI**(GitHub Actions):ruff + 非 live pytest;P1 起加 eval gate
+- ledger/client 测试使用真实 PostgreSQL(本地 compose / CI service container)
 
 ## 10. 里程碑
 
 | # | 里程碑 | 验收 |
 |---|---|---|
 | M1 | 仓库初始化 + CI + compose 起 Langfuse | 骨架就绪,CI 绿 |
-| M2 | gateway:双 adapter + router/fallback + 记账(含缓存测量) | 示例调通两家;SQLite 有记录含 cache_hit_rate;文章① |
+| M2 | gateway:双 adapter + router/fallback + 记账(含缓存测量) | 示例调通两家;PostgreSQL 有记录含 cache_hit_rate;文章① |
 | M3 | obs:span 采集 + Langfuse 可见 | 调用树在 UI 完整呈现;文章② |
 | M4 | eval:四指标 + runner + 手算对照测试 | 示例 golden set 出分;阈值退出码生效;文章③ |
 | M5 | proxy 薄壳 + 收尾 | curl 走 OpenAI 格式调通;README 完整 |

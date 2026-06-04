@@ -1,0 +1,34 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: langfuse
+      POSTGRES_DB: langfuse
+    volumes:
+      - ./data/pg:/var/lib/postgresql/data
+
+  langfuse:
+    image: langfuse/langfuse:2
+    restart: unless-stopped
+    depends_on: [postgres]
+    ports: ["3100:3000"]
+    environment:
+      DATABASE_URL: postgresql://langfuse:langfuse@postgres:5432/langfuse
+      NEXTAUTH_URL: http://localhost:3100
+      # 以下两项为本地开发占位值,暴露到任何网络前必须更换
+      NEXTAUTH_SECRET: local-dev-secret-change-me
+      SALT: local-dev-salt-change-me
+      TELEMETRY_ENABLED: "false"
+
+  anvil-postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: anvil
+      POSTGRES_PASSWORD: anvil
+      POSTGRES_DB: anvil
+    ports: ["5434:5432"]
+    volumes:
+      - ./data/anvil-pg:/var/lib/postgresql/data
