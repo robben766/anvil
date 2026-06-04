@@ -14,7 +14,3 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/anvil_gateway"]
-
-[tool.pytest.ini_options]
-asyncio_mode = "auto"
-markers = ["live: real API calls; run manually with -m live"]
