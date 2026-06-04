@@ -11,6 +11,7 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 markers = ["live: real API calls; run manually with -m live"]
+testpaths = ["packages"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["anvil_gateway"]
