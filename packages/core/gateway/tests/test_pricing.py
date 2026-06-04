@@ -22,3 +22,15 @@ def test_unknown_model_costs_zero():
 def test_all_priced_models_have_three_fields():
     for model, p in PRICES.items():
         assert set(p) == {"input", "output", "cached"}, model
+
+
+def test_served_model_name_resolves_price():
+    """服务端返回实际模型名(deepseek-chat 映射为 deepseek-v4-flash),必须能计价。"""
+    assert compute_cost("deepseek-v4-flash", 1_000_000, 0, 0) > Decimal(0)
+
+
+def test_snapshot_name_prefix_match():
+    """百炼快照名(如 qwen-plus-2026-01-25)按最长前缀匹配到 qwen-plus。"""
+    assert compute_cost("qwen-plus-2026-01-25", 1_000_000, 0, 0) == compute_cost(
+        "qwen-plus", 1_000_000, 0, 0
+    )
