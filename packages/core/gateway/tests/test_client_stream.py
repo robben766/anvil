@@ -9,7 +9,7 @@ from anvil_gateway import chat, configure
 from anvil_gateway.router import Cooldown
 
 TEST_DB_URL = os.environ.get(
-    "ANVIL_DATABASE_URL", "postgresql+asyncpg://anvil:anvil@localhost:5434/anvil"
+    "ANVIL_TEST_DATABASE_URL", "postgresql+asyncpg://anvil:anvil@localhost:5434/anvil_test"
 )
 
 DS_URL = "https://api.deepseek.com/v1/chat/completions"
