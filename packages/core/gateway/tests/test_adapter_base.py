@@ -68,3 +68,20 @@ async def test_send_timeout_is_retryable():
     async with httpx.AsyncClient() as client:
         with pytest.raises(RetryableError):
             await FakeAdapter().send(client, "k", {"model": "m", "messages": []})
+
+
+def test_parse_response_empty_choices_raises_fatal():
+    a = FakeAdapter()
+    usage = a.parse_usage(OK_DATA, latency_ms=1)
+    with pytest.raises(FatalRequestError):
+        a.parse_response({"id": "x", "model": "m", "choices": []}, usage)
+
+
+@respx.mock
+async def test_send_non_json_200_is_retryable():
+    respx.post("https://fake.example.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, text="<html>gateway error</html>")
+    )
+    async with httpx.AsyncClient() as client:
+        with pytest.raises(RetryableError):
+            await FakeAdapter().send(client, "k", {"model": "m", "messages": []})

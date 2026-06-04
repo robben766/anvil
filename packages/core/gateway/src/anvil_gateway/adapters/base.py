@@ -6,7 +6,7 @@ from typing import Any
 
 import httpx
 
-from anvil_gateway.errors import RetryableError, classify_status
+from anvil_gateway.errors import FatalRequestError, RetryableError, classify_status
 from anvil_gateway.pricing import compute_cost
 from anvil_gateway.types import ChatResponse
 from anvil_gateway.usage import UsageRecord
@@ -44,7 +44,10 @@ class OpenAICompatAdapter:
             raise classify_status(resp.status_code)(
                 f"{self.provider} HTTP {resp.status_code}: {resp.text[:200]}"
             )
-        return resp.json()
+        try:
+            return resp.json()
+        except ValueError as e:
+            raise RetryableError(f"{self.provider} non-JSON 200: {resp.text[:200]}") from e
 
     def parse_usage(
         self,
@@ -73,7 +76,10 @@ class OpenAICompatAdapter:
         )
 
     def parse_response(self, data: dict[str, Any], usage: UsageRecord) -> ChatResponse:
-        choice = data["choices"][0]
+        choices = data.get("choices") or []
+        if not choices:
+            raise FatalRequestError(f"{self.provider} returned no choices")
+        choice = choices[0]
         msg = choice["message"]
         return ChatResponse(
             content=msg.get("content"),
