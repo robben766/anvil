@@ -17,6 +17,7 @@ services:
     environment:
       DATABASE_URL: postgresql://langfuse:langfuse@postgres:5432/langfuse
       NEXTAUTH_URL: http://localhost:3100
+      # 以下两项为本地开发占位值,暴露到任何网络前必须更换
       NEXTAUTH_SECRET: local-dev-secret-change-me
       SALT: local-dev-salt-change-me
       TELEMETRY_ENABLED: "false"
