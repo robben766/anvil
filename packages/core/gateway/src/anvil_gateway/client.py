@@ -21,6 +21,7 @@ from anvil_gateway.ledger import SqliteLedger
 from anvil_gateway.router import MODEL_PROVIDER, Cooldown, call_with_retry, resolve
 from anvil_gateway.types import ChatResponse, Message
 
+# NOTE: 模块级单例(进程内)——多产品共享同一配置/冷却/账本;需要隔离时再引入 Gateway 类。
 _ADAPTERS: dict[str, OpenAICompatAdapter] = {
     "deepseek": DeepSeekAdapter(),
     "dashscope": DashScopeAdapter(),
@@ -58,10 +59,12 @@ async def _call_one(
 ) -> ChatResponse:
     payload = adapter.build_payload(model, messages, **params)
     start = time.perf_counter()
+    # TODO: 复用 per-provider AsyncClient 连接池;低 QPS 下可接受。
     async with httpx.AsyncClient(timeout=_config["timeout"]) as client:
         data = await adapter.send(client, api_key, payload)
     latency_ms = int((time.perf_counter() - start) * 1000)
     usage = adapter.parse_usage(data, latency_ms=latency_ms, session_id=session_id)
+    # TODO: sqlite 同步写会短暂阻塞 event loop;低频可接受,生产化前改 run_in_executor。
     _get_ledger().insert(usage)
     return adapter.parse_response(data, usage)
 
@@ -88,6 +91,7 @@ async def chat(
         if provider is None:
             raise FatalRequestError(f"unknown model: {candidate}")
         if not _cooldown.available(provider):
+            failures.append(RetryableError(f"{provider} on cooldown"))
             continue
         adapter = _ADAPTERS[provider]
         api_key = os.environ.get(adapter.api_key_env, "")

@@ -2,9 +2,11 @@ import httpx
 import pytest
 import respx
 
+import anvil_gateway.client as client_mod
 from anvil_gateway import chat, configure
 from anvil_gateway.errors import AllProvidersFailedError, FatalRequestError
 from anvil_gateway.ledger import SqliteLedger
+from anvil_gateway.router import Cooldown
 
 DS_URL = "https://api.deepseek.com/v1/chat/completions"
 QW_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
@@ -40,6 +42,7 @@ def env_and_ledger(tmp_path, monkeypatch):
     monkeypatch.setenv("DASHSCOPE_API_KEY", "k2")
     path = str(tmp_path / "ledger.sqlite3")
     configure(ledger_path=path, retry_base_delay=0)
+    client_mod._cooldown = Cooldown()
     yield path
 
 
@@ -55,10 +58,11 @@ async def test_happy_path_records_usage(env_and_ledger):
 
 @respx.mock
 async def test_fallback_to_second_provider(env_and_ledger):
-    respx.post(DS_URL).mock(return_value=httpx.Response(500, text="down"))  # 1 次 + 2 重试
+    ds_route = respx.post(DS_URL).mock(return_value=httpx.Response(500, text="down"))
     respx.post(QW_URL).mock(return_value=httpx.Response(200, json=QW_OK))
     resp = await chat("chat-default", MSGS)
     assert resp.provider == "dashscope" and resp.content == "好的"
+    assert ds_route.call_count == 3  # 1 次 + 2 重试
 
 
 @respx.mock
@@ -80,3 +84,16 @@ async def test_all_failed(env_and_ledger):
 async def test_unknown_model_is_fatal(env_and_ledger):
     with pytest.raises(FatalRequestError):
         await chat("gpt-99", MSGS)
+
+
+@respx.mock
+async def test_auth_failure_triggers_cooldown_then_fallback(env_and_ledger):
+    ds_route = respx.post(DS_URL).mock(return_value=httpx.Response(401, text="unauthorized"))
+    respx.post(QW_URL).mock(return_value=httpx.Response(200, json=QW_OK))
+    resp = await chat("chat-default", MSGS)
+    assert resp.provider == "dashscope"
+    assert ds_route.call_count == 1  # FatalAuth 不重试,直接冷却切换
+    # 第二次调用:deepseek 仍在冷却,直接走 dashscope,deepseek 不再被请求
+    resp2 = await chat("chat-default", MSGS)
+    assert resp2.provider == "dashscope"
+    assert ds_route.call_count == 1
