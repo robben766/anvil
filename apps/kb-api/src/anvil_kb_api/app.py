@@ -121,6 +121,11 @@ def _debug_list(scored_chunks: list[ScoredChunk], *, include_contributions: bool
         scored_chunks:         List of ScoredChunk items.
         include_contributions: If True, add 'contributions' key per item (fused only).
         contributions:         The full contributions map from RetrievalDebug.
+
+    Note on ``rank``:
+        rank = 本列表内位置(1..k)；fused 项的 contributions 是 k*4 候选池内排位,
+        可能 > k（例如 dense:7 表示该 chunk 在稠密候选池中排第 7，超出最终返回的 k）。
+        contributions 的值原样透传，不裁剪。
     """
     items = []
     for i, sc in enumerate(scored_chunks):
@@ -201,11 +206,15 @@ def create_app(
         sparse_index = None  # no dual-write when test retriever is injected
 
     # H4: parse CORS origins from environment
+    # 空串/纯空格的 env 值视为未配置，fallback 到 ["*"]，避免 CORSMiddleware 收到空列表
     cors_origins_env = os.environ.get("ANVIL_KB_CORS_ORIGINS", "*")
     if cors_origins_env == "*":
         cors_origins: list[str] = ["*"]
     else:
         cors_origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
+        if not cors_origins:
+            # empty string or whitespace-only env → treat as unconfigured → wildcard
+            cors_origins = ["*"]
 
     app = FastAPI(title="anvil-kb-api", version="0.1.0")
     app.add_middleware(

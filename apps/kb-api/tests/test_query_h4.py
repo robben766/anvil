@@ -809,3 +809,200 @@ async def test_auth_wrong_key_401(_run_kb_migrations, monkeypatch):
     await engine.dispose()
 
     assert r.status_code == 401
+
+
+# ===========================================================================
+# 6. Minor: no Authorization header → 401 when key is configured
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_auth_no_header_401(_run_kb_migrations, monkeypatch):
+    """API key is set but no Authorization header is sent → 401."""
+    from anvil_kb_api.app import create_app
+
+    monkeypatch.setenv("ANVIL_KB_API_KEY", "my-key")
+
+    engine, sf = _make_engine_and_sf()
+    app = create_app(session_factory=sf, embedder=FakeEmbedder())
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        # No Authorization header at all
+        r = await client.post(
+            "/v1/kb/query",
+            json={"question": "等待期?", "stream": False},
+        )
+
+    await engine.dispose()
+
+    assert r.status_code == 401, f"Expected 401, got {r.status_code}"
+    body = r.json()
+    assert "detail" in body
+
+
+# ===========================================================================
+# 7. Important: dual-write integration — upload → BM25 searchable
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_upload_then_bm25_searchable(_run_kb_migrations):
+    """Upload a .md file → BM25 index is written; PgBM25Index.search finds the unique word.
+
+    Uses create_app(session_factory=..., embedder=FakeEmbedder512) WITHOUT injecting a
+    retriever, so app constructs PgBM25Index + hybrid Retriever itself (dual-write path).
+    After upload, we construct a fresh PgBM25Index with the same session_factory and
+    search the unique word — it must hit.
+    """
+    from sqlalchemy import text
+
+    from anvil_kb.store.bm25 import PgBM25Index
+    from anvil_kb_api.app import create_app
+
+    # Use a 512-dim one-hot fake embedder (arbitrary dim ≤ EMBEDDING_DIM is fine for BM25 test)
+    class FakeEmbedder512:
+        @property
+        def dim(self) -> int:
+            return _EMBEDDING_DIM
+
+        def embed_texts(self, texts: list[str]) -> list[list[float]]:
+            return [self._one_hot(t) for t in texts]
+
+        def embed_query(self, text: str) -> list[float]:
+            return self._one_hot(text)
+
+        def _one_hot(self, text: str) -> list[float]:
+            vec = [0.0] * _EMBEDDING_DIM
+            if text:
+                vec[hash(text) % _EMBEDDING_DIM] = 1.0
+            return vec
+
+    engine, sf = _make_engine_and_sf()
+
+    # Truncate tables to isolate this test
+    async with engine.begin() as conn:
+        await conn.execute(text("TRUNCATE kb_chunks, kb_documents CASCADE"))
+
+    # Build app WITHOUT retriever injection → app self-constructs PgBM25Index + hybrid Retriever
+    # (this exercises the dual-write code path in upload_document)
+    app = create_app(session_factory=sf, embedder=FakeEmbedder512())
+
+    # Unique word that will not appear in other tests
+    unique_word = "xyzquantumfluxcapacitor9999"
+    md_content = f"# Test Document\n\n本文档含有独特词 {unique_word}，用于验证 BM25 双写。\n"
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        r = await client.post(
+            "/v1/kb/documents",
+            files={"file": ("test_bm25.md", md_content.encode(), "text/plain")},
+        )
+
+    assert r.status_code == 201, f"Upload failed: {r.status_code} {r.text}"
+
+    # Now search using a fresh PgBM25Index backed by the same session_factory
+    bm25 = PgBM25Index(sf)
+    results = await bm25.search(unique_word, k=5)
+
+    # Clean up
+    async with engine.begin() as conn:
+        await conn.execute(text("TRUNCATE kb_chunks, kb_documents CASCADE"))
+    await engine.dispose()
+
+    assert len(results) > 0, (
+        f"BM25 search for unique word '{unique_word}' returned no results — "
+        "dual-write to sparse index may have failed"
+    )
+    # The top result should contain the unique word
+    top_content = results[0].chunk.content
+    assert unique_word in top_content, (
+        f"Top BM25 result does not contain '{unique_word}': {top_content!r}"
+    )
+
+
+# ===========================================================================
+# 8. Important: _debug_list contributions rank > k passes through unchanged
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_debug_contributions_rank_exceeds_k(_run_kb_migrations):
+    """contributions with a dense rank > k (e.g. dense:7, k=2) must be passed through
+    unchanged in the fused debug items — _debug_list must NOT clip or error on rank > k.
+    """
+    from anvil_kb_api.app import create_app
+
+    k = 2
+
+    class FakeRetrieverWithHighRank:
+        """Retriever whose contributions contain a dense rank > k."""
+
+        async def retrieve(self, question: str, k: int = 5) -> list:
+            return self._chunks[:k]
+
+        async def retrieve_debug(self, question: str, k: int = 5):
+            from anvil_kb.retrieve.fusion import RetrievalDebug
+
+            top = self._chunks[:k]
+            dense = [ScoredChunk(chunk=sc.chunk, score=sc.score) for sc in top]
+            sparse = [ScoredChunk(chunk=sc.chunk, score=sc.score * 0.8) for sc in top]
+            fused = top
+            # dense rank for first chunk is 7, which exceeds k=2 — must be passed through
+            contributions = {
+                str(top[0].chunk.id): {"dense": 7, "sparse": 1},
+                str(top[1].chunk.id): {"dense": 1, "sparse": 2},
+            }
+            return RetrievalDebug(
+                dense=dense,
+                sparse=sparse,
+                fused=fused,
+                contributions=contributions,
+            )
+
+        @property
+        def _chunks(self):
+            return [
+                _make_scored_chunk("chunk alpha", seq=0, score=0.9),
+                _make_scored_chunk("chunk beta", seq=1, score=0.8),
+            ]
+
+    retriever = FakeRetrieverWithHighRank()
+    fake_chat = _make_fake_chat_stream(["答案。"])
+
+    engine, sf = _make_engine_and_sf()
+    app = create_app(
+        session_factory=sf,
+        embedder=FakeEmbedder(),
+        retriever=retriever,
+        chat=fake_chat,
+    )
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        async with client.stream(
+            "POST",
+            "/v1/kb/query",
+            json={"question": "test", "stream": True, "debug": True, "k": k},
+        ) as resp:
+            raw = await resp.aread()
+
+    await engine.dispose()
+
+    events = _parse_sse_events(raw.decode())
+    debug_event = next(e for e in events if e["event"] == "debug")
+    payload = json.loads(debug_event["data"])
+
+    fused_items = payload["fused"]
+    assert len(fused_items) >= 1, "Expected at least one fused item"
+
+    # Find the item with dense rank=7 (> k=2) — must be present as-is
+    first_item = fused_items[0]
+    contrib = first_item["contributions"]
+    assert contrib["dense"] == 7, (
+        f"Expected contributions.dense=7 (rank > k), got {contrib['dense']!r}. "
+        "contributions must be passed through unchanged even when rank > k."
+    )
