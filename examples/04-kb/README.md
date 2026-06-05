@@ -54,7 +54,7 @@ done
 curl -F "file=@packages/kb/golden/pdf/01-安康保障计划条款.pdf" http://localhost:8400/v1/kb/documents
 ```
 
-三篇 .md 文档各返回 `201`，chunk_count 分别为 12 / 8 / 9；.pdf 返回 chunk_count=10（手工 PDF 解析器）。
+三篇 .md 文档各返回 `201`，chunk_count 分别为 10 / 7 / 8（注:KB-M1b 当时为 12 / 8 / 9,KB-M4 引入空白 chunk 过滤后同一语料分块数下降,本文统一为当前值）；.pdf 返回 chunk_count=10（手工 PDF 解析器）。
 
 ---
 
@@ -140,7 +140,7 @@ Retriever k=5；judge 走网关 deepseek-chat；faithfulness + answer_relevancy�
 
 ### 解读
 
-- **hybrid 在汇总层面最优**：MRR=0.881，recall=1.000，同时比 dense（MRR=0.857）高出约 2.8 个百分点，体现了 RRF 融合两路信号的提升效果。
+- **hybrid 在汇总层面最优**：MRR=0.881，recall=1.000，比 dense（MRR=0.857）高出约 2.4 个百分点（相对提升约 2.8%），体现了 RRF 融合两路信号的提升效果。
 - **sparse 在换述场景（kb-15）完全失效**：BM25 依赖词面重叠，面对语义重写的问句召回率跌至 0；dense 和 hybrid 均正常召回，这是 dense 向量互补 sparse 的典型证据。
 - **kb-16 三模式 MRR 均偏低（dense=0.500，sparse=0.250，hybrid=0.333）**：该换述用例的目标 chunk 在所有模式下均未排到首位，说明该问法与语料的表达差距超出了当前 embedding 模型和 BM25 的共同能力边界，属于正常上限，并非 hybrid 退步。
 - **dense-only 在本语料集上 recall 已达满分**，加入 sparse 的主要收益体现在 MRR 排序质量提升（从 0.857 → 0.881），而非召回覆盖。
