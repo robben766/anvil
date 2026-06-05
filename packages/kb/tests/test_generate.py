@@ -271,3 +271,146 @@ async def test_answer_stream_delta_payloads_are_strings():
 
     assert all(isinstance(d, str) for d in deltas)
     assert "".join(deltas) == "hello world"
+
+
+# ---------------------------------------------------------------------------
+# C-1 regression: default import path is reachable via monkeypatch
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_answer_uses_real_default_import_path(monkeypatch):
+    """C-1 regression: anvil_gateway.chat is patchable — confirms the default import path works."""
+    from anvil_gateway.types import ChatChunk  # noqa: F401 – ensure types importable
+
+    called_with: list[str] = []
+
+    async def fake_chat(model, messages, **kw):
+        called_with.append(model)
+        return SimpleNamespace(content="fake [1]")
+
+    import anvil_gateway
+
+    monkeypatch.setattr(anvil_gateway, "chat", fake_chat)
+
+    retrieved = [_scored("内容。", seq=0)]
+    result = await answer("q", retrieved, chat=None)
+
+    # fake was reached, confirming the default import path is live
+    assert called_with == ["chat-default"]
+    assert isinstance(result, KbAnswer)
+
+
+# ---------------------------------------------------------------------------
+# I-1: streaming usage tail chunk must not emit extra delta events
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_answer_stream_usage_tail_chunk_no_extra_delta():
+    """I-1: a ChatChunk(delta='', finish_reason='stop', usage=...) must not emit a delta event."""
+    from anvil_gateway.types import ChatChunk
+
+    retrieved = [_scored("内容。", seq=0)]
+
+    async def fake_chat_stream(model, messages, **kw):
+        async def _gen():
+            yield ChatChunk(delta="token1 ", finish_reason=None)
+            yield ChatChunk(delta="token2", finish_reason=None)
+            # real usage tail block as emitted by _stream_one
+            yield ChatChunk(delta="", finish_reason="stop", usage=None)
+
+        return _gen()
+
+    events = []
+    async for event_type, payload in answer_stream("q?", retrieved, chat=fake_chat_stream):
+        events.append((event_type, payload))
+
+    delta_payloads = [payload for event_type, payload in events if event_type == "delta"]
+    # usage tail block (delta="") must NOT produce a delta event
+    assert "" not in delta_payloads
+    # only the real content tokens
+    assert delta_payloads == ["token1 ", "token2"]
+
+
+# ---------------------------------------------------------------------------
+# I-2: response.content == None → KbAnswer(text="", citations=[])
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_answer_content_none_returns_empty_kbanswer():
+    """I-2: SimpleNamespace(content=None) → KbAnswer(text='', citations=[])."""
+    retrieved = [_scored("内容。", seq=0)]
+
+    async def fake_chat(model, messages, **kw):
+        return SimpleNamespace(content=None)
+
+    result = await answer("q", retrieved, chat=fake_chat)
+    assert isinstance(result, KbAnswer)
+    assert result.text == ""
+    assert result.citations == []
+
+
+# ---------------------------------------------------------------------------
+# M-2: streaming path uses model="chat-default"
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_answer_stream_uses_chat_default_model():
+    """M-2: answer_stream must call chat with model='chat-default'."""
+    from anvil_gateway.types import ChatChunk
+
+    retrieved = [_scored("内容。", seq=0)]
+    captured_model: list[str] = []
+
+    async def fake_chat_stream(model, messages, **kw):
+        captured_model.append(model)
+
+        async def _gen():
+            yield ChatChunk(delta="ok", finish_reason="stop")
+
+        return _gen()
+
+    async for _ in answer_stream("q?", retrieved, chat=fake_chat_stream):
+        pass
+
+    assert captured_model == ["chat-default"]
+
+
+# ---------------------------------------------------------------------------
+# M-3: empty retrieved list smoke test
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_answer_empty_retrieved_smoke():
+    """M-3: retrieved=[] → answer returns KbAnswer normally with empty citations."""
+
+    async def fake_chat(model, messages, **kw):
+        return SimpleNamespace(content="无相关资料。")
+
+    result = await answer("q", [], chat=fake_chat)
+    assert isinstance(result, KbAnswer)
+    assert result.citations == []
+
+
+@pytest.mark.asyncio
+async def test_answer_stream_empty_retrieved_smoke():
+    """M-3: retrieved=[] → answer_stream completes normally, done.citations == []."""
+    from anvil_gateway.types import ChatChunk
+
+    async def fake_chat_stream(model, messages, **kw):
+        async def _gen():
+            yield ChatChunk(delta="无相关资料。", finish_reason="stop")
+
+        return _gen()
+
+    events = []
+    async for event_type, payload in answer_stream("q?", [], chat=fake_chat_stream):
+        events.append((event_type, payload))
+
+    done_answer = events[-1][1]
+    assert isinstance(done_answer, KbAnswer)
+    assert done_answer.citations == []

@@ -108,7 +108,7 @@ async def answer(
 ) -> KbAnswer:
     """Return a KbAnswer with citation-grounded text."""
     if chat is None:
-        from anvil_gateway.chat import chat as _default_chat  # noqa: PLC0415
+        from anvil_gateway import chat as _default_chat  # noqa: PLC0415
 
         chat = _default_chat
 
@@ -138,7 +138,7 @@ async def answer_stream(
         ("done",    KbAnswer)            — once, at the end
     """
     if chat is None:
-        from anvil_gateway.chat import chat as _default_chat  # noqa: PLC0415
+        from anvil_gateway import chat as _default_chat  # noqa: PLC0415
 
         chat = _default_chat
 
