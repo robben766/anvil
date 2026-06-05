@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 from anvil_kb.ingest.chunker import chunk_markdown
-from anvil_kb.ingest.pdf import parse_pdf
+from anvil_kb.ingest.pdf import _sanitize_cell, parse_pdf
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -254,6 +254,76 @@ def test_no_double_table_content() -> None:
         f"'保险金额的30%' appears {count} times in output (corpus has {expected_count}; "
         "excess indicates bbox-based table dedup failed)."
     )
+
+
+# ---------------------------------------------------------------------------
+# Test 4b — claims guide factual fidelity (KB-D2 review)
+# ---------------------------------------------------------------------------
+
+def test_claims_guide_contains_10days() -> None:
+    """「10日内」must appear in 理赔指南 output (normalised).
+
+    The corpus states the policyholder must report a claim within 10 days
+    (第1条 and 第5条 step 1).  This is a safety-critical deadline; its
+    presence in the parsed output is verified explicitly.
+    """
+    md = _load_pdf(GUIDE_PDF)
+    assert "10日内" in _norm(md), (
+        "Key claims deadline '10日内' not found in 理赔指南 output.\n"
+        f"Snippet: {md[:1000]}"
+    )
+
+
+def test_claims_guide_contains_30days() -> None:
+    """「30日内」must appear in 理赔指南 output (normalised).
+
+    The corpus states the insurer must complete assessment within 30 days
+    after complete documents are received (第2条 and 第5条 step 4).
+    This is a regulatory obligation; its presence is verified explicitly.
+    """
+    md = _load_pdf(GUIDE_PDF)
+    assert "30日内" in _norm(md), (
+        "Key claims deadline '30日内' not found in 理赔指南 output.\n"
+        f"Snippet: {md[:1000]}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 4c — table cell sanitization (KB-D2 review)
+# ---------------------------------------------------------------------------
+
+def test_sanitize_cell_pipe_escaping() -> None:
+    """_sanitize_cell must escape '|' as '\\|' to protect markdown table structure."""
+    assert _sanitize_cell("A|B") == r"A\|B", (
+        "_sanitize_cell('A|B') should return 'A\\\\|B' but got: "
+        + repr(_sanitize_cell("A|B"))
+    )
+
+
+def test_sanitize_cell_newline_collapse() -> None:
+    """_sanitize_cell must replace embedded '\\n' with a single space."""
+    assert _sanitize_cell("C\nD") == "C D", (
+        "_sanitize_cell('C\\nD') should return 'C D' but got: "
+        + repr(_sanitize_cell("C\nD"))
+    )
+
+
+def test_sanitize_cell_pipe_and_newline_combined() -> None:
+    """_sanitize_cell handles a cell with both '|' and '\\n'."""
+    result = _sanitize_cell("A|B\nC|D")
+    assert result == r"A\|B C\|D", (
+        "Combined pipe+newline cell not sanitized correctly: " + repr(result)
+    )
+
+
+def test_sanitize_cell_none_returns_empty() -> None:
+    """_sanitize_cell(None) must return an empty string."""
+    assert _sanitize_cell(None) == ""
+
+
+def test_sanitize_cell_strips_whitespace() -> None:
+    """_sanitize_cell strips leading/trailing whitespace before escaping."""
+    assert _sanitize_cell("  hello  ") == "hello"
 
 
 # ---------------------------------------------------------------------------

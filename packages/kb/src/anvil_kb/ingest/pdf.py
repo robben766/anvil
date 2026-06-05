@@ -169,7 +169,12 @@ def _detect_repeated(raw_lines: list[_RawLine], num_pages: int) -> set[str]:
             repeated.add(norm)
     for norm, pages in footer_pages.items():
         if len(pages) >= 1:
-            # Footer zone: any occurrence → strip (page numbers are unique per page)
+            # Footer threshold is ≥1 (any occurrence) rather than ≥2 because page
+            # numbers are unique per page — they never repeat across pages — so the
+            # ≥2-page dedup heuristic used for headers would never fire for them.
+            # Known limitation: on a single-page PDF the bottom 10% of the sole page
+            # could be mis-classified as "footer" and stripped; this is an accepted
+            # false-positive risk documented here.
             repeated.add(norm)
 
     return repeated
@@ -225,6 +230,22 @@ def _body_font_size(raw_lines: list[_RawLine]) -> float:
 # Step 4 — extract tables and convert to markdown
 # ---------------------------------------------------------------------------
 
+def _sanitize_cell(cell: Any) -> str:
+    """Normalize a single table cell value for inclusion in a markdown table row.
+
+    Transformations applied (in order):
+      1. ``None`` → empty string.
+      2. Convert to string and strip surrounding whitespace.
+      3. Escape ``|`` as ``\\|`` — raw pipe characters would break the
+         markdown table column delimiter syntax (e.g. formula ranges "A|B").
+      4. Replace embedded newlines with a single space — multi-line cell
+         content would break the one-row-per-line markdown table structure.
+    """
+    if cell is None:
+        return ""
+    return str(cell).strip().replace("|", "\\|").replace("\n", " ")
+
+
 def _tables_to_md(pdf: Any) -> list[_TableBlock]:
     """Extract all tables from the PDF and convert them to markdown format.
 
@@ -234,7 +255,8 @@ def _tables_to_md(pdf: Any) -> list[_TableBlock]:
     Table → markdown conversion:
       • First row is treated as the header row.
       • A ``|---|---| ...`` separator row is inserted after the header.
-      • Each cell is stripped of surrounding whitespace; None → empty string.
+      • Each cell is sanitized via ``_sanitize_cell`` (strip, pipe-escape,
+        newline-collapse) before being joined into a table row string.
     """
     blocks: list[_TableBlock] = []
 
@@ -248,7 +270,7 @@ def _tables_to_md(pdf: Any) -> list[_TableBlock]:
             cell_texts: set[str] = set()
 
             for row_idx, row in enumerate(data):
-                cells = [str(cell).strip() if cell is not None else "" for cell in row]
+                cells = [_sanitize_cell(cell) for cell in row]
                 for c in cells:
                     cell_texts.add(_normalise_ws(c))
                 row_str = "| " + " | ".join(cells) + " |"
@@ -267,25 +289,6 @@ def _tables_to_md(pdf: Any) -> list[_TableBlock]:
             ))
 
     return blocks
-
-
-def _line_in_table_bbox(line: _RawLine, table_blocks: list[_TableBlock]) -> bool:
-    """Return True if this line's top coordinate falls within any table's bbox.
-
-    We check (page_idx, top) against each table's bbox to prevent the raw
-    text lines that overlap the table area from being emitted as body text
-    (which would create duplicate content).
-
-    The check uses a 2pt tolerance to handle floating-point rounding.
-    """
-    for tbl in table_blocks:
-        if tbl.page_idx != line.page_idx:
-            continue
-        if tbl.top - 2 <= line.top <= tbl.top + (tbl.markdown.count("\n") + 1) * 20 + 2:
-            # Rough height estimation: each table row ≈ 20pt.
-            # This is intentionally generous so we don't miss any overlapping lines.
-            return True
-    return False
 
 
 def _line_in_table_bbox_precise(

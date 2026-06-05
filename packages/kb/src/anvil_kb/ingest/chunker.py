@@ -251,7 +251,15 @@ def chunk_markdown(
         else:
             all_chunks.extend(_window(text, block, size, overlap))
 
-    # Assign monotonically increasing seq
+    # Filter out blank chunks (content that is entirely whitespace).
+    # This can arise from markdown sections that contain only blank lines
+    # (e.g. consecutive empty lines between headings).  The offset invariant
+    # text[start_offset:end_offset] == content is unaffected because we drop
+    # the chunk entirely rather than modifying its slice.
+    all_chunks = [c for c in all_chunks if c.content.strip() != ""]
+
+    # Assign monotonically increasing seq (re-numbered after blank filtering
+    # so that seq is always a contiguous 0-based sequence).
     for seq, chunk in enumerate(all_chunks):
         chunk.seq = seq
 
