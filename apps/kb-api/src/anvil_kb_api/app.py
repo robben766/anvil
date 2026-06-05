@@ -140,8 +140,8 @@ def create_app(
 
     store = PgVectorStore(session_factory)
 
-    # retriever can be injected for tests; defaults to Retriever(embedder, store)
-    _retriever = retriever if retriever is not None else Retriever(embedder, store)
+    # retriever can be injected for tests; defaults to dense-only until H4 wires sparse
+    _retriever = retriever if retriever is not None else Retriever(embedder, store, mode="dense")
 
     app = FastAPI(title="anvil-kb-api", version="0.1.0")
     app.add_middleware(

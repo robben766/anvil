@@ -178,3 +178,109 @@ async def test_idempotent_second_ingest_replaces(kb_store):
     )
     assert all(h.chunk.document_id == doc2.id for h in all_hits), \
         "All chunks should belong to the second document"
+
+
+# ── Fake sparse index ─────────────────────────────────────────────────────────
+
+
+class FakeSparseIndex:
+    """Fake SparseIndex that records which chunks it received."""
+
+    def __init__(self) -> None:
+        self.received_chunks: list | None = None
+        self.call_count: int = 0
+
+    async def index_chunks(self, chunks: list) -> None:
+        self.call_count += 1
+        self.received_chunks = list(chunks)
+
+    async def search(self, query: str, k: int) -> list:
+        return []
+
+
+# ── Dual-write tests ──────────────────────────────────────────────────────────
+
+
+async def test_sparse_index_receives_same_chunks_as_store(kb_store):
+    """When sparse_index is provided, index_chunks receives the exact same
+    Chunk objects (same ids) that were upserted to the vector store."""
+    from anvil_kb.ingest.pipeline import ingest_markdown
+
+    embedder = FakeEmbedder()
+    sparse = FakeSparseIndex()
+
+    doc, n = await ingest_markdown(
+        title="双写测试",
+        source_name="test/dual-write",
+        text=TWO_SECTION_MD,
+        embedder=embedder,
+        store=kb_store,
+        sparse_index=sparse,
+    )
+
+    assert sparse.call_count == 1, "index_chunks must be called exactly once"
+    assert sparse.received_chunks is not None
+    assert len(sparse.received_chunks) == n, "sparse must receive all chunks"
+
+    stored_ids = {c.id for c in sparse.received_chunks}
+    # Verify these chunks actually exist in the vector store
+    all_hits = await kb_store.search(_vec(0), k=100)
+    stored_vector_ids = {h.chunk.id for h in all_hits}
+    # All chunks sent to sparse must be in the vector store (same set)
+    assert stored_ids == stored_vector_ids, (
+        "sparse_index must receive the same chunk ids as the vector store"
+    )
+
+
+async def test_no_sparse_index_skips_dual_write(kb_store):
+    """Without sparse_index, ingest works as before (no error, no sparse call)."""
+    from anvil_kb.ingest.pipeline import ingest_markdown
+
+    embedder = FakeEmbedder()
+    # sparse_index defaults to None — no FakeSparseIndex provided
+    doc, n = await ingest_markdown(
+        title="非双写",
+        source_name="test/no-sparse",
+        text=TWO_SECTION_MD,
+        embedder=embedder,
+        store=kb_store,
+    )
+    assert n > 0
+
+
+async def test_sparse_index_called_after_vector_store(kb_store):
+    """sparse_index.index_chunks is called AFTER store.upsert_chunks
+    (dual-write order: upsert→index)."""
+    from anvil_kb.ingest.pipeline import ingest_markdown
+
+    call_log: list[str] = []
+
+    class OrderedFakeStore:
+        async def upsert_chunks(self, doc, chunks):
+            call_log.append("upsert")
+
+        async def search(self, query_vector, k):
+            return []
+
+        async def delete_document(self, document_id):
+            pass
+
+    class OrderedFakeSparse:
+        async def index_chunks(self, chunks):
+            call_log.append("index")
+
+        async def search(self, query, k):
+            return []
+
+    await ingest_markdown(
+        title="顺序测试",
+        source_name="test/order",
+        text=TWO_SECTION_MD,
+        embedder=FakeEmbedder(),
+        store=OrderedFakeStore(),
+        sparse_index=OrderedFakeSparse(),
+    )
+
+    assert call_log == ["upsert", "index"], (
+        f"Expected ['upsert', 'index'], got {call_log}"
+    )
