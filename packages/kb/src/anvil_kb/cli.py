@@ -69,39 +69,31 @@ def summarize_enrich_usage(rows) -> dict:
     }
 
 
-def _query_enrich_usage(gateway_session_factory, since: datetime):
+async def _query_enrich_usage(since: datetime) -> list:
     """Query usage_records for anvil-kb-enrich session rows since *since*.
 
-    Reads the gateway DB read-only; never modifies any gateway table.
-    Returns a list of UsageRecordRow instances.
-    """
-    from anvil_gateway.db import UsageRecordRow  # noqa: PLC0415
-
-    with gateway_session_factory() as session:
-        rows = (
-            session.query(UsageRecordRow)
-            .filter(
-                UsageRecordRow.session_id == _ENRICH_SESSION_ID,
-                UsageRecordRow.created_at >= since,
-            )
-            .all()
-        )
-    return rows
-
-
-def _make_gateway_session_factory():
-    """Create a SQLAlchemy session factory pointing at the gateway DB.
-
-    Reads ANVIL_DATABASE_URL from env (same DB as kb components).
+    Uses an async SQLAlchemy engine (asyncpg) to stay compatible with the
+    single-driver venv (no psycopg2 available).
+    Returns a list of row mappings with keys: prompt_tokens, cached_tokens, cost_cny.
     """
     import os  # noqa: PLC0415
 
-    from sqlalchemy import create_engine  # noqa: PLC0415
-    from sqlalchemy.orm import sessionmaker  # noqa: PLC0415
+    from sqlalchemy import select  # noqa: PLC0415
+    from sqlalchemy.ext.asyncio import create_async_engine  # noqa: PLC0415
+
+    from anvil_gateway.db import UsageRecordRow  # noqa: PLC0415
 
     url = os.environ.get("ANVIL_DATABASE_URL", "")
-    engine = create_engine(url)
-    return sessionmaker(bind=engine)
+    engine = create_async_engine(url)
+    async with engine.connect() as conn:
+        stmt = select(UsageRecordRow).where(
+            UsageRecordRow.session_id == _ENRICH_SESSION_ID,
+            UsageRecordRow.created_at >= since,
+        )
+        result = await conn.execute(stmt)
+        rows = result.mappings().all()
+    await engine.dispose()
+    return list(rows)
 
 
 # ---------------------------------------------------------------------------
@@ -177,8 +169,7 @@ async def _run_ingest_command(
         print(f"ingested: {source_name!r}  title={title!r}  chunks={n_chunks}")
 
     if enrich:
-        gw_session_factory = _make_gateway_session_factory()
-        rows = _query_enrich_usage(gw_session_factory, since=run_start)
+        rows = await _query_enrich_usage(since=run_start)
         summary = summarize_enrich_usage(rows)
         print(
             f"enrich: {summary['calls']} calls, "
@@ -353,8 +344,7 @@ async def _run_eval_with_ingest(
 
     # Print enrichment cost report after corpus ingest (before eval)
     if enrich and run_start is not None:
-        gw_session_factory = _make_gateway_session_factory()
-        rows = _query_enrich_usage(gw_session_factory, since=run_start)
+        rows = await _query_enrich_usage(since=run_start)
         summary = summarize_enrich_usage(rows)
         print(
             f"enrich: {summary['calls']} calls, "

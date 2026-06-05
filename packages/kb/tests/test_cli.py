@@ -949,18 +949,13 @@ class TestEnrichFlag:
         fake_session_factory = MagicMock()
         mock_ingest = AsyncMock(return_value=(MagicMock(), 1))
         fake_chat = MagicMock()
-        fake_gw_session_factory = MagicMock()
 
         with (
             patch("anvil_kb.store.pg.PgVectorStore", return_value=MagicMock()),
             patch("anvil_kb.store.bm25.PgBM25Index", return_value=MagicMock()),
             patch("anvil_kb.ingest.pipeline.ingest_markdown", mock_ingest),
             patch("anvil_gateway.chat", fake_chat, create=True),
-            patch(
-                "anvil_kb.cli._make_gateway_session_factory",
-                return_value=fake_gw_session_factory,
-            ),
-            patch("anvil_kb.cli._query_enrich_usage", return_value=[]),
+            patch("anvil_kb.cli._query_enrich_usage", new=AsyncMock(return_value=[])),
         ):
             await _run_ingest_command(
                 [str(md_file)], fake_embedder, fake_session_factory, enrich=True
@@ -1133,14 +1128,13 @@ class TestEnrichPrintLine:
         fake_row.cached_tokens = 50
         fake_row.cost_cny = Decimal("0.020000")
 
-        mock_query_usage = MagicMock(return_value=[fake_row])
+        mock_query_usage = AsyncMock(return_value=[fake_row])
 
         with (
             patch("anvil_kb.store.pg.PgVectorStore", return_value=MagicMock()),
             patch("anvil_kb.store.bm25.PgBM25Index", return_value=MagicMock()),
             patch("anvil_kb.ingest.pipeline.ingest_markdown", mock_ingest),
             patch("anvil_gateway.chat", MagicMock(), create=True),
-            patch("anvil_kb.cli._make_gateway_session_factory", return_value=MagicMock()),
             patch("anvil_kb.cli._query_enrich_usage", mock_query_usage),
         ):
             await _run_ingest_command(

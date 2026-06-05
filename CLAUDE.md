@@ -22,7 +22,7 @@ hand-rolled RAG pipeline:chunker / fastembed / PgVectorStore(pgvector) / Retriev
 - CLI 三命令(需 `ANVIL_DATABASE_URL` 环境变量):
   - `anvil-kb ingest <file.md|file.pdf ...>` — 写入 KB(.pdf 走 hand-rolled pdfplumber 解析器)
   - `anvil-kb query "<question>" [--k 5]` — 检索+生成(需 API key)
-  - `anvil-kb eval --dataset kb.jsonl --corpus corpus/ [--k 5] [--recall-threshold 0.8] [--mode dense|sparse|hybrid] [--rerank]` — 纯检索评测,不调 LLM;exit 0=达标;hybrid 模式启用 pgvector + BM25 RRF 融合,是默认值;`--rerank` 加入 bge-reranker-base Cross-Encoder 精排(+MRR,+延迟 ~3 s/query);`--corpus` 同时支持 .md 和 .pdf 文件
+  - `anvil-kb eval --dataset kb.jsonl --corpus corpus/ [--k 5] [--recall-threshold 0.8] [--mode dense|sparse|hybrid] [--rerank] [--enrich]` — 纯检索评测,不调 LLM;exit 0=达标;hybrid 模式启用 pgvector + BM25 RRF 融合,是默认值;`--rerank` 加入 bge-reranker-base Cross-Encoder 精排(+MRR,+延迟 ~3 s/query);`--corpus` 同时支持 .md 和 .pdf 文件;`--enrich` 启用 Contextual Retrieval(灌入时每 chunk 调 LLM 生成 context_prefix,需 API key,prompt cache hit ~89%,25 chunk≈¥0.004)
 
 ## apps/
 
