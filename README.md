@@ -36,7 +36,7 @@ uv run python examples/01-hello-gateway/main.py
 uv run python examples/02-tracing/main.py
 
 # 6. 运行评测
-uvx anvil-eval run --dataset packages/core/eval/golden/demo.jsonl
+uv run anvil-eval run --dataset packages/core/eval/golden/demo.jsonl
 
 # 7. 启动 OpenAI 兼容 proxy(见 examples/03-proxy/README.md)
 uv run uvicorn anvil_gateway.proxy.app:app --port 8400
