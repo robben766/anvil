@@ -205,3 +205,62 @@ class TestRunEvalCommand:
             )
         captured = capsys.readouterr()
         assert "skip" in captured.out.lower() or "跳过" in captured.out
+
+    @pytest.mark.asyncio
+    async def test_exit_0_when_mean_recall_equals_threshold(self, capsys):
+        """mean recall == threshold (0.5) → exit 0 (≥ semantics).
+
+        Two answerable cases: recall 1.0 (hit) + recall 0.0 (miss) → mean 0.5.
+        With --recall-threshold 0.5 the run is exactly on the boundary and
+        must still pass (exit 0).
+        """
+        case1 = self._make_case(
+            id="t1", question="q1", evidences=["evidence one"]
+        )
+        case2 = self._make_case(
+            id="t2", question="q2", evidences=["evidence two"]
+        )
+
+        sc_hit = _make_scored_chunk("evidence one found here")
+        sc_miss = _make_scored_chunk("completely unrelated content")
+
+        fake_retriever = AsyncMock()
+        fake_retriever.retrieve = AsyncMock(side_effect=[[sc_hit], [sc_miss]])
+
+        with pytest.raises(SystemExit) as exc:
+            await _run_eval_command(
+                cases=[case1, case2],
+                retriever=fake_retriever,
+                k=5,
+                recall_threshold=0.5,
+            )
+        # mean recall 0.5 >= threshold 0.5 → exit 0
+        assert exc.value.code == 0
+
+    @pytest.mark.asyncio
+    async def test_all_unanswerable_dataset_exits_1(self, capsys):
+        """All cases answerable=False → mean recall 0.0 → exit 1.
+
+        retrieve must never be called because no answerable case exists.
+        """
+        case1 = self._make_case(
+            id="u1", question="q1", evidences=[], answerable=False
+        )
+        case2 = self._make_case(
+            id="u2", question="q2", evidences=[], answerable=False
+        )
+
+        fake_retriever = AsyncMock()
+        fake_retriever.retrieve = AsyncMock()
+
+        with pytest.raises(SystemExit) as exc:
+            await _run_eval_command(
+                cases=[case1, case2],
+                retriever=fake_retriever,
+                k=5,
+                recall_threshold=0.8,
+            )
+        # mean recall 0.0 < threshold 0.8 → exit 1
+        assert exc.value.code == 1
+        # retrieve must not have been called — no answerable case to process
+        fake_retriever.retrieve.assert_not_called()
