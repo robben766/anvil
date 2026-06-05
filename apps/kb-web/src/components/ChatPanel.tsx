@@ -35,6 +35,8 @@ export default function ChatPanel({ onCite }: Props) {
   const [streaming, setStreaming] = useState(false);
   // Debug mode persists across turns (user-controlled checkbox)
   const [debugMode, setDebugMode] = useState(false);
+  // Rerank mode persists across turns (user-controlled checkbox, default off)
+  const [rerankMode, setRerankMode] = useState(false);
   const abortRef = useRef<(() => void) | null>(null);
   const nextId = useRef(0);
 
@@ -114,6 +116,7 @@ export default function ChatPanel({ onCite }: Props) {
         },
       },
       debugMode,
+      rerankMode,
     );
 
     abortRef.current = abort;
@@ -186,15 +189,26 @@ export default function ChatPanel({ onCite }: Props) {
             onKeyDown={handleKeyDown}
           />
           <div className="flex flex-col gap-2 items-end">
-            <label className="flex items-center gap-1.5 text-xs text-slate-500 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={debugMode}
-                onChange={(e) => setDebugMode(e.target.checked)}
-                className="rounded"
-              />
-              调试
-            </label>
+            <div className="flex items-center gap-3">
+              <label className="flex items-center gap-1.5 text-xs text-slate-500 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={rerankMode}
+                  onChange={(e) => setRerankMode(e.target.checked)}
+                  className="rounded"
+                />
+                重排
+              </label>
+              <label className="flex items-center gap-1.5 text-xs text-slate-500 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={debugMode}
+                  onChange={(e) => setDebugMode(e.target.checked)}
+                  className="rounded"
+                />
+                调试
+              </label>
+            </div>
             {streaming ? (
               <button
                 onClick={handleStop}
@@ -249,7 +263,10 @@ function TurnCard({ turn, onCite, onToggleSources, onToggleDebug }: TurnCardProp
                 ▶
               </span>
               检索调试（dense {turn.debugFrame.dense.length} / sparse{" "}
-              {turn.debugFrame.sparse.length} / fused {turn.debugFrame.fused.length}）
+              {turn.debugFrame.sparse.length} / fused {turn.debugFrame.fused.length}
+              {turn.debugFrame.reranked !== null
+                ? ` / reranked ${turn.debugFrame.reranked.length}`
+                : ""}）
             </button>
             {turn.debugOpen && (
               <div className="mt-2">

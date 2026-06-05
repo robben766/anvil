@@ -76,7 +76,9 @@ async def _run_ingest_command(files: list[str], embedder, session_factory) -> No
         print(f"ingested: {source_name!r}  title={title!r}  chunks={n_chunks}")
 
 
-async def _run_query_command(question: str, k: int, embedder, session_factory) -> None:
+async def _run_query_command(
+    question: str, k: int, embedder, session_factory, *, rerank: bool = False
+) -> None:
     from anvil_kb.generate import answer
     from anvil_kb.retrieve.retriever import Retriever
     from anvil_kb.store.bm25 import PgBM25Index
@@ -84,7 +86,13 @@ async def _run_query_command(question: str, k: int, embedder, session_factory) -
 
     store = PgVectorStore(session_factory)
     bm25 = PgBM25Index(session_factory)
-    retriever = Retriever(embedder, store, sparse_index=bm25, mode="hybrid")
+
+    reranker = None
+    if rerank:
+        from anvil_kb.retrieve.rerank import FastEmbedReranker
+        reranker = FastEmbedReranker()
+
+    retriever = Retriever(embedder, store, sparse_index=bm25, mode="hybrid", reranker=reranker)
     retrieved = await retriever.retrieve(question, k=k)
     kb_answer = await answer(question, retrieved)
     print(kb_answer.text)
@@ -105,11 +113,14 @@ async def _run_eval_command(
 
     Exits the process with code 0 (pass) or 1 (fail).
     """
+    import time
+
     from anvil_eval.metrics.retrieval import mrr, precision_at_k, recall_at_k
 
     recall_scores: list[float] = []
     precision_scores: list[float] = []
     mrr_scores: list[float] = []
+    retrieval_latencies_ms: list[float] = []
 
     print(f"{'id':<12} {'recall@k':>10} {'precision@k':>12} {'mrr':>8}")
     print("-" * 48)
@@ -119,7 +130,11 @@ async def _run_eval_command(
             print(f"{case.id:<12}  跳过(拒答用例)")
             continue
 
+        t0 = time.perf_counter()
         retrieved = await retriever.retrieve(case.question, k=k)
+        t1 = time.perf_counter()
+        retrieval_latencies_ms.append((t1 - t0) * 1000)
+
         texts = [sc.chunk.content for sc in retrieved]
 
         r = recall_at_k(texts, case.evidences, k)
@@ -138,6 +153,11 @@ async def _run_eval_command(
     mean_recall = sum(recall_scores) / len(recall_scores) if recall_scores else 0.0
     mean_precision = sum(precision_scores) / len(precision_scores) if precision_scores else 0.0
     mean_mrr = sum(mrr_scores) / len(mrr_scores) if mrr_scores else 0.0
+    mean_latency_ms = (
+        sum(retrieval_latencies_ms) / len(retrieval_latencies_ms)
+        if retrieval_latencies_ms
+        else 0.0
+    )
     print(f"{'mean':<12} {mean_recall:>10.3f} {mean_precision:>12.3f} {mean_mrr:>8.3f}")
     print()
     print(
@@ -145,6 +165,7 @@ async def _run_eval_command(
         f"  threshold = {recall_threshold}"
         f"  mean MRR = {mean_mrr:.4f}"
     )
+    print(f"mean retrieval latency: {mean_latency_ms:.1f} ms")
 
     if mean_recall >= recall_threshold:
         print("PASS")
@@ -162,6 +183,7 @@ async def _run_eval_with_ingest(
     embedder,
     session_factory,
     mode: str = "hybrid",
+    rerank: bool = False,
 ) -> None:
     """Ingest corpus then run eval loop."""
     from anvil_eval.dataset import load_dataset
@@ -197,8 +219,14 @@ async def _run_eval_with_ingest(
         )
         print(f"  {source_name}  ({n_chunks} chunks)")
 
+    # Build reranker if requested
+    reranker = None
+    if rerank:
+        from anvil_kb.retrieve.rerank import FastEmbedReranker
+        reranker = FastEmbedReranker()
+
     # Build retriever
-    retriever = Retriever(embedder, store, sparse_index=sparse_index, mode=mode)
+    retriever = Retriever(embedder, store, sparse_index=sparse_index, mode=mode, reranker=reranker)
 
     # Load golden cases
     cases = load_dataset(dataset_path)
@@ -230,6 +258,12 @@ def _build_parser() -> argparse.ArgumentParser:
     query_p.add_argument(
         "--k", type=int, default=5, help="Number of chunks to retrieve (default: 5)"
     )
+    query_p.add_argument(
+        "--rerank",
+        action="store_true",
+        default=False,
+        help="Enable cross-encoder reranking (FastEmbedReranker; loads ~1GB model on first use)",
+    )
 
     # --- eval ---
     eval_p = sub.add_parser("eval", help="Evaluate retrieval recall/precision on a golden dataset")
@@ -248,6 +282,12 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=["dense", "sparse", "hybrid"],
         default="hybrid",
         help="Retrieval mode: dense | sparse | hybrid (default: hybrid)",
+    )
+    eval_p.add_argument(
+        "--rerank",
+        action="store_true",
+        default=False,
+        help="Enable cross-encoder reranking (FastEmbedReranker; loads ~1GB model on first use)",
     )
 
     return parser
@@ -274,7 +314,11 @@ def main() -> None:
 
     elif args.command == "query":
         embedder, session_factory = _make_components()
-        asyncio.run(_run_query_command(args.question, args.k, embedder, session_factory))
+        asyncio.run(
+            _run_query_command(
+                args.question, args.k, embedder, session_factory, rerank=args.rerank
+            )
+        )
 
     elif args.command == "eval":
         embedder, session_factory = _make_components()
@@ -287,6 +331,7 @@ def main() -> None:
                 embedder=embedder,
                 session_factory=session_factory,
                 mode=args.mode,
+                rerank=args.rerank,
             )
         )
 

@@ -22,7 +22,7 @@ Chunk identity rule:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from anvil_kb.store.base import ScoredChunk
 
@@ -34,19 +34,24 @@ class RetrievalDebug:
     Attributes:
         dense:         Top-k results from the dense (vector) path.
         sparse:        Top-k results from the sparse (BM25) path.
-        fused:         Final top-k results after RRF fusion.
+        fused:         Top-k results after RRF fusion (pre-rerank view; unchanged
+                       by the reranker).
         contributions: For each chunk_id (str), maps "dense" and/or "sparse"
                        to the 1-based rank within the *k*4 candidate list*
                        used internally (None if the chunk was absent from that
                        sub-list).  Because the candidate list has k*4 entries,
                        ranks may be greater than k — e.g. rank 17 in a k=5
                        search (k*4 = 20 candidates).
+        reranked:      Top-k results after cross-encoder reranking (None when no
+                       reranker is configured).  This is the final answer order;
+                       ``fused`` preserves the pre-rerank RRF order for comparison.
     """
 
     dense: list[ScoredChunk]
     sparse: list[ScoredChunk]
     fused: list[ScoredChunk]
     contributions: dict[str, dict[str, int | None]]
+    reranked: list[ScoredChunk] | None = field(default=None)
 
 
 def rrf_fuse(
