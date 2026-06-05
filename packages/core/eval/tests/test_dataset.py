@@ -47,3 +47,25 @@ def test_invalid_json_reports_file_line(tmp_path):
     p.write_text('{"id":"c1","question":"q","reference":"r"}\n{bad json}', encoding="utf-8")
     with pytest.raises(ValueError, match="line 2"):
         load_dataset(str(p))
+
+
+def test_load_evidences_and_answerable(tmp_path):
+    """新字段 evidences / answerable 能加载且值正确。"""
+    row = {
+        "id": "c10",
+        "question": "等待期是多少?",
+        "reference": "90天",
+        "evidences": ["等待期为90天", "自合同成立起90天"],
+        "answerable": False,
+    }
+    c = load_dataset(_write(tmp_path, [row]))[0]
+    assert c.evidences == ["等待期为90天", "自合同成立起90天"]
+    assert c.answerable is False
+
+
+def test_old_format_missing_new_fields(tmp_path):
+    """旧格式行(无 evidences/answerable)加载后使用默认值。"""
+    row = {"id": "c11", "question": "q", "reference": "r"}
+    c = load_dataset(_write(tmp_path, [row]))[0]
+    assert c.evidences == []
+    assert c.answerable is True
