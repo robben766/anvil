@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import DateTime, ForeignKey, Integer, Text, func
+from sqlalchemy import DateTime, ForeignKey, Integer, PrimaryKeyConstraint, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -53,9 +53,29 @@ class ChunkRow(Base):
     start_offset: Mapped[int] = mapped_column(Integer, nullable=False)
     end_offset: Mapped[int] = mapped_column(Integer, nullable=False)
     embedding: Mapped[list[float]] = mapped_column(Vector(EMBEDDING_DIM), nullable=False)
+    token_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class PostingRow(Base):
+    """Inverted-index postings for BM25.
+
+    Composite PK (term, chunk_id) ensures one row per (term, chunk) pair.
+    Cascade DELETE from kb_chunks keeps postings consistent.
+    """
+
+    __tablename__ = "kb_postings"
+    __table_args__ = (PrimaryKeyConstraint("term", "chunk_id"),)
+
+    term: Mapped[str] = mapped_column(Text, nullable=False)
+    chunk_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("kb_chunks.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    tf: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
 def make_engine(database_url: str | None = None) -> AsyncEngine:
