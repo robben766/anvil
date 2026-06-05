@@ -21,4 +21,5 @@ apps/(递进式四产品)
 
 - [x] M1 骨架 + CI + Langfuse
 - [x] M2 gateway:统一调用 / fallback / 缓存命中记账 → [examples/01-hello-gateway](examples/01-hello-gateway/)
-- [ ] M3 obs · M4 eval · M5 proxy
+- [x] M3 obs:自研 span + OTLP 导出 Langfuse v3,GenAI semconv → [examples/02-tracing](examples/02-tracing/)
+- [ ] M4 eval · M5 proxy

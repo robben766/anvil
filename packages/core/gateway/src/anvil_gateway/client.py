@@ -9,6 +9,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
+from anvil_obs import semconv, span
 
 from anvil_gateway.adapters.base import OpenAICompatAdapter
 from anvil_gateway.adapters.dashscope import DashScopeAdapter
@@ -52,6 +53,20 @@ def _get_ledger() -> PostgresLedger:
     return _ledger
 
 
+def _fill_span(s: Any, usage: Any) -> None:
+    """Populate a span with GenAI semconv attributes from a UsageRecord."""
+    s.set_attribute(semconv.GEN_AI_RESPONSE_MODEL, usage.model)
+    s.set_attribute(semconv.GEN_AI_USAGE_INPUT_TOKENS, usage.prompt_tokens)
+    s.set_attribute(semconv.GEN_AI_USAGE_OUTPUT_TOKENS, usage.completion_tokens)
+    s.set_attribute(semconv.ANVIL_CACHED_TOKENS, usage.cached_tokens)
+    s.set_attribute(semconv.ANVIL_CACHE_HIT_RATE, usage.cache_hit_rate)
+    s.set_attribute(semconv.ANVIL_COST_CNY, float(usage.cost_cny))
+    if usage.ttft_ms is not None:
+        s.set_attribute(semconv.ANVIL_TTFT_MS, usage.ttft_ms)
+    if usage.session_id is not None:
+        s.set_attribute(semconv.ANVIL_SESSION_ID, usage.session_id)
+
+
 async def _call_one(
     adapter: OpenAICompatAdapter,
     api_key: str,
@@ -60,16 +75,24 @@ async def _call_one(
     params: dict[str, Any],
     session_id: str | None,
 ) -> ChatResponse:
-    payload = adapter.build_payload(model, messages, **params)
-    start = time.perf_counter()
-    # TODO: 复用 per-provider AsyncClient 连接池;低 QPS 下可接受。
-    async with httpx.AsyncClient(timeout=_config["timeout"]) as client:
-        data = await adapter.send(client, api_key, payload)
-    latency_ms = int((time.perf_counter() - start) * 1000)
-    usage = adapter.parse_usage(data, latency_ms=latency_ms, session_id=session_id)
-    # NOTE: PG 写入为 async,不再阻塞 event loop
-    await _get_ledger().insert(usage)
-    return adapter.parse_response(data, usage)
+    with span(
+        f"chat {model}",
+        **{
+            semconv.GEN_AI_SYSTEM: adapter.provider,
+            semconv.GEN_AI_REQUEST_MODEL: model,
+        },
+    ) as s:
+        payload = adapter.build_payload(model, messages, **params)
+        start = time.perf_counter()
+        # TODO: 复用 per-provider AsyncClient 连接池;低 QPS 下可接受。
+        async with httpx.AsyncClient(timeout=_config["timeout"]) as client:
+            data = await adapter.send(client, api_key, payload)
+        latency_ms = int((time.perf_counter() - start) * 1000)
+        usage = adapter.parse_usage(data, latency_ms=latency_ms, session_id=session_id)
+        # NOTE: PG 写入为 async,不再阻塞 event loop
+        await _get_ledger().insert(usage)
+        _fill_span(s, usage)
+        return adapter.parse_response(data, usage)
 
 
 async def _stream_one(
@@ -80,54 +103,65 @@ async def _stream_one(
     params: dict[str, Any],
     session_id: str | None,
 ) -> AsyncIterator[ChatChunk]:
-    payload = adapter.build_payload(model, messages, **params)
-    payload["stream"] = True
-    payload["stream_options"] = {"include_usage": True}
-    start = time.perf_counter()
-    ttft_ms: int | None = None
-    try:
-        async with httpx.AsyncClient(timeout=_config["timeout"]) as client:
-            async with client.stream(
-                "POST",
-                f"{adapter.base_url}/chat/completions",
-                json=payload,
-                headers={"Authorization": f"Bearer {api_key}"},
-            ) as resp:
-                if resp.status_code != 200:
-                    body = (await resp.aread())[:200]
-                    raise classify_status(resp.status_code)(
-                        f"{adapter.provider} HTTP {resp.status_code}: {body!r}"
-                    )
-                async for line in resp.aiter_lines():
-                    if not line.startswith("data: "):
-                        continue
-                    raw = line[len("data: "):]
-                    if raw == "[DONE]":
-                        break
-                    chunk = json.loads(raw)
-                    if chunk.get("usage"):
-                        latency_ms = int((time.perf_counter() - start) * 1000)
-                        usage = adapter.parse_usage(
-                            chunk, latency_ms=latency_ms, ttft_ms=ttft_ms, session_id=session_id
+    with span(
+        f"chat {model}",
+        **{
+            semconv.GEN_AI_SYSTEM: adapter.provider,
+            semconv.GEN_AI_REQUEST_MODEL: model,
+        },
+    ) as s:
+        payload = adapter.build_payload(model, messages, **params)
+        payload["stream"] = True
+        payload["stream_options"] = {"include_usage": True}
+        start = time.perf_counter()
+        ttft_ms: int | None = None
+        try:
+            async with httpx.AsyncClient(timeout=_config["timeout"]) as client:
+                async with client.stream(
+                    "POST",
+                    f"{adapter.base_url}/chat/completions",
+                    json=payload,
+                    headers={"Authorization": f"Bearer {api_key}"},
+                ) as resp:
+                    if resp.status_code != 200:
+                        body = (await resp.aread())[:200]
+                        raise classify_status(resp.status_code)(
+                            f"{adapter.provider} HTTP {resp.status_code}: {body!r}"
                         )
-                        await _get_ledger().insert(usage)
-                        # usage 末块按约定为流的最后一个数据块,finish_reason 统一记 "stop"
-                        yield ChatChunk(delta="", finish_reason="stop", usage=usage)
-                        continue
-                    choices = chunk.get("choices") or []
-                    if not choices:
-                        continue
-                    delta = (choices[0].get("delta") or {}).get("content") or ""
-                    if delta and ttft_ms is None:
-                        ttft_ms = int((time.perf_counter() - start) * 1000)
-                    finish = choices[0].get("finish_reason")
-                    if delta or finish:
-                        yield ChatChunk(delta=delta, finish_reason=finish)
-    except httpx.TimeoutException as e:
-        raise RetryableError(f"{adapter.provider} stream timeout: {e}") from e
-    except httpx.TransportError as e:
-        # NOTE: 流中途断开无法续传,统一归类为 RetryableError,由调用方决定是否整体重发
-        raise RetryableError(f"{adapter.provider} stream transport: {e}") from e
+                    async for line in resp.aiter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        raw = line[len("data: "):]
+                        if raw == "[DONE]":
+                            break
+                        chunk = json.loads(raw)
+                        if chunk.get("usage"):
+                            latency_ms = int((time.perf_counter() - start) * 1000)
+                            usage = adapter.parse_usage(
+                                chunk,
+                                latency_ms=latency_ms,
+                                ttft_ms=ttft_ms,
+                                session_id=session_id,
+                            )
+                            await _get_ledger().insert(usage)
+                            _fill_span(s, usage)
+                            # usage 末块按约定为流的最后一个数据块,finish_reason 统一记 "stop"
+                            yield ChatChunk(delta="", finish_reason="stop", usage=usage)
+                            continue
+                        choices = chunk.get("choices") or []
+                        if not choices:
+                            continue
+                        delta = (choices[0].get("delta") or {}).get("content") or ""
+                        if delta and ttft_ms is None:
+                            ttft_ms = int((time.perf_counter() - start) * 1000)
+                        finish = choices[0].get("finish_reason")
+                        if delta or finish:
+                            yield ChatChunk(delta=delta, finish_reason=finish)
+        except httpx.TimeoutException as e:
+            raise RetryableError(f"{adapter.provider} stream timeout: {e}") from e
+        except httpx.TransportError as e:
+            # NOTE: 流中途断开无法续传,统一归类为 RetryableError,由调用方决定是否整体重发
+            raise RetryableError(f"{adapter.provider} stream transport: {e}") from e
 
 
 async def chat(
@@ -156,25 +190,26 @@ async def chat(
         api_key = os.environ.get(adapter.api_key_env, "")
         return _stream_one(adapter, api_key, candidate, messages, params, session_id)
     failures: list[Exception] = []
-    for candidate in resolve(model):
-        provider = MODEL_PROVIDER.get(candidate)
-        if provider is None:
-            raise FatalRequestError(f"unknown model: {candidate}")
-        if not _cooldown.available(provider):
-            failures.append(RetryableError(f"{provider} on cooldown"))
-            continue
-        adapter = _ADAPTERS[provider]
-        api_key = os.environ.get(adapter.api_key_env, "")
-        try:
-            return await call_with_retry(
-                lambda a=adapter, k=api_key, m=candidate: _call_one(
-                    a, k, m, messages, params, session_id
-                ),
-                base_delay=_config["retry_base_delay"],
-            )
-        except RetryableError as e:
-            failures.append(e)
-        except FatalAuthError as e:
-            _cooldown.mark(provider)
-            failures.append(e)
-    raise AllProvidersFailedError(f"all candidates failed: {failures!r}")
+    with span(f"gateway.chat {model}") as _root:  # noqa: F841  — root span for fallback tree
+        for candidate in resolve(model):
+            provider = MODEL_PROVIDER.get(candidate)
+            if provider is None:
+                raise FatalRequestError(f"unknown model: {candidate}")
+            if not _cooldown.available(provider):
+                failures.append(RetryableError(f"{provider} on cooldown"))
+                continue
+            adapter = _ADAPTERS[provider]
+            api_key = os.environ.get(adapter.api_key_env, "")
+            try:
+                return await call_with_retry(
+                    lambda a=adapter, k=api_key, m=candidate: _call_one(
+                        a, k, m, messages, params, session_id
+                    ),
+                    base_delay=_config["retry_base_delay"],
+                )
+            except RetryableError as e:
+                failures.append(e)
+            except FatalAuthError as e:
+                _cooldown.mark(provider)
+                failures.append(e)
+        raise AllProvidersFailedError(f"all candidates failed: {failures!r}")
