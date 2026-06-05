@@ -9,6 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
 
+from anvil_kb.db import make_session_factory
+from anvil_kb.store.pg import PgVectorStore
+
 TEST_DB_URL = os.environ.get(
     "ANVIL_TEST_DATABASE_URL", "postgresql+asyncpg://anvil:anvil@localhost:5434/anvil_test"
 )
@@ -55,4 +58,16 @@ async def kb_session(_run_kb_migrations):
     await engine.dispose()
 
     # Post-test cleanup.
+    await _truncate_kb_tables(TEST_DB_URL)
+
+
+@pytest.fixture
+async def kb_store(_run_kb_migrations):
+    """Provide a PgVectorStore backed by the test database; tables are truncated before/after."""
+    await _truncate_kb_tables(TEST_DB_URL)
+
+    session_factory = make_session_factory(TEST_DB_URL)
+    store = PgVectorStore(session_factory)
+    yield store
+
     await _truncate_kb_tables(TEST_DB_URL)

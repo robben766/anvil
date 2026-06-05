@@ -2,13 +2,21 @@
 
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import datetime
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import DateTime, ForeignKey, Integer, Text, func
 from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.pool import NullPool
 
 EMBEDDING_DIM = 512  # BAAI/bge-small-zh-v1.5
 
@@ -48,3 +56,23 @@ class ChunkRow(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+_DEFAULT_DB_URL = "postgresql+asyncpg://anvil:anvil@localhost:5432/anvil"
+
+
+def make_engine(database_url: str | None = None) -> AsyncEngine:
+    """Create an async engine with NullPool (mirrors ledger.py pattern).
+
+    Priority: explicit argument > ANVIL_DATABASE_URL env var > built-in default.
+    """
+    url = database_url or os.environ.get("ANVIL_DATABASE_URL", _DEFAULT_DB_URL)
+    return create_async_engine(url, poolclass=NullPool)
+
+
+def make_session_factory(
+    database_url: str | None = None,
+) -> async_sessionmaker[AsyncSession]:
+    """Return an async_sessionmaker bound to an engine built from *database_url*."""
+    engine = make_engine(database_url)
+    return async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
