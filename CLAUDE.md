@@ -23,3 +23,23 @@ hand-rolled RAG pipeline:chunker / fastembed / PgVectorStore(pgvector) / Retriev
   - `anvil-kb ingest <file.md ...>` — 写入 KB
   - `anvil-kb query "<question>" [--k 5]` — 检索+生成(需 API key)
   - `anvil-kb eval --dataset kb.jsonl --corpus corpus/ [--k 5] [--recall-threshold 0.8]` — 纯检索评测,不调 LLM;exit 0=达标
+
+## apps/
+
+### kb-api (apps/kb-api)
+
+知识库 FastAPI 后端,端口 8400,SSE 流式返回答案。
+
+- 启动: `uv run anvil-kb-api`(需 `ANVIL_DATABASE_URL` + API key)
+- 测试: `uv run pytest apps/kb-api -q`(注意:api 测试需真 PG;mock 路径走 `not live`)
+- DI 构造:依赖通过 FastAPI `Depends` 注入(retriever/generator 在 lifespan 初始化)
+
+### kb-web (apps/kb-web)
+
+知识库前端,Next.js 16 + React 19 + Tailwind 4,连接 kb-api SSE 端点。
+
+- 安装: `pnpm install`
+- 开发: `pnpm dev`(http://localhost:3000)
+- 构建: `pnpm build`
+- Lint: `pnpm lint`
+- SSE 契约见 spec §6(请求格式) / §7(流式事件格式)

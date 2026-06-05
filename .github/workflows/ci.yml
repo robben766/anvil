@@ -37,3 +37,22 @@ jobs:
       - run: cd packages/core/gateway && uv run alembic upgrade head
       - run: cd packages/kb && uv run alembic upgrade head
       - run: uv run pytest -m "not live" -q
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/kb-web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: apps/kb-web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm build
