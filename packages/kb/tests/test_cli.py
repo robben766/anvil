@@ -264,3 +264,75 @@ class TestRunEvalCommand:
         assert exc.value.code == 1
         # retrieve must not have been called — no answerable case to process
         fake_retriever.retrieve.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_mrr_column_in_output(self, capsys):
+        """eval 输出应含 MRR 列头,每行含 mrr 分,均值行含 mean MRR。"""
+        case1 = self._make_case(id="t1", question="q1", evidences=["evidence one"])
+        sc1 = _make_scored_chunk("evidence one found here")
+
+        fake_retriever = AsyncMock()
+        fake_retriever.retrieve = AsyncMock(return_value=[sc1])
+
+        with pytest.raises(SystemExit):
+            await _run_eval_command(
+                cases=[case1],
+                retriever=fake_retriever,
+                k=5,
+                recall_threshold=0.8,
+            )
+        captured = capsys.readouterr()
+        assert "mrr" in captured.out.lower()
+
+    @pytest.mark.asyncio
+    async def test_mrr_value_for_rank1_hit(self, capsys):
+        """rank-1 命中时 MRR = 1.000,输出中可见。"""
+        case1 = self._make_case(id="t1", question="q1", evidences=["evidence one"])
+        sc1 = _make_scored_chunk("evidence one found here")
+
+        fake_retriever = AsyncMock()
+        fake_retriever.retrieve = AsyncMock(return_value=[sc1])
+
+        with pytest.raises(SystemExit):
+            await _run_eval_command(
+                cases=[case1],
+                retriever=fake_retriever,
+                k=5,
+                recall_threshold=0.8,
+            )
+        captured = capsys.readouterr()
+        # MRR = 1.0 for rank-1 hit; output should contain "1.000"
+        assert "1.000" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# Parser --mode tests
+# ---------------------------------------------------------------------------
+
+
+class TestParserMode:
+    def test_eval_default_mode_is_hybrid(self):
+        parser = _build_parser()
+        args = parser.parse_args(["eval", "--dataset", "d.jsonl", "--corpus", "c/"])
+        assert args.mode == "hybrid"
+
+    def test_eval_mode_dense(self):
+        parser = _build_parser()
+        args = parser.parse_args(
+            ["eval", "--dataset", "d.jsonl", "--corpus", "c/", "--mode", "dense"]
+        )
+        assert args.mode == "dense"
+
+    def test_eval_mode_sparse(self):
+        parser = _build_parser()
+        args = parser.parse_args(
+            ["eval", "--dataset", "d.jsonl", "--corpus", "c/", "--mode", "sparse"]
+        )
+        assert args.mode == "sparse"
+
+    def test_eval_mode_hybrid_explicit(self):
+        parser = _build_parser()
+        args = parser.parse_args(
+            ["eval", "--dataset", "d.jsonl", "--corpus", "c/", "--mode", "hybrid"]
+        )
+        assert args.mode == "hybrid"
