@@ -66,7 +66,10 @@ def _make_scored_chunk(content: str, seq: int = 0, score: float = 0.9) -> Scored
 
 
 def _parse_sse_events(raw: str) -> list[dict]:
-    """Parse raw SSE text into list of {event, data} dicts."""
+    """Parse raw SSE text into list of {event, data} dicts.
+
+    JSON payload 由 json.dumps 保证单行,本解析器按 single-data-per-event 处理。
+    """
     events = []
     current: dict = {}
     for line in raw.splitlines():
@@ -270,7 +273,9 @@ async def test_query_nonstream_default_stream_is_true(query_client_stream):
 
     async with client.stream("POST", "/v1/kb/query", json={"question": "等待期?"}) as resp:
         assert resp.status_code == 200
-        assert "text/event-stream" in resp.headers["content-type"]
+        ct = resp.headers["content-type"]
+        assert "text/event-stream" in ct
+        assert "charset=utf-8" in ct
 
 
 # ---------------------------------------------------------------------------
@@ -284,7 +289,9 @@ async def test_query_stream_content_type(query_client_stream):
     req_body = {"question": "等待期?", "stream": True}
     async with client.stream("POST", "/v1/kb/query", json=req_body) as resp:
         assert resp.status_code == 200
-        assert "text/event-stream" in resp.headers["content-type"]
+        ct = resp.headers["content-type"]
+        assert "text/event-stream" in ct
+        assert "charset=utf-8" in ct
 
 
 @pytest.mark.asyncio
@@ -472,5 +479,25 @@ async def test_query_empty_question_stream_400(_run_kb_migrations):
     ) as client:
         r = await client.post("/v1/kb/query", json={"question": "", "stream": True})
         assert r.status_code == 400
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_query_k_zero_422(_run_kb_migrations):
+    """k=0 violates ge=1 constraint → Pydantic validation error 422."""
+    from anvil_kb_api.app import create_app
+
+    engine = create_async_engine(TEST_DB_URL, poolclass=NullPool)
+    sf = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    app = create_app(session_factory=sf, embedder=FakeEmbedder())
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        r = await client.post(
+            "/v1/kb/query", json={"question": "等待期?", "k": 0, "stream": False}
+        )
+        assert r.status_code == 422
 
     await engine.dispose()

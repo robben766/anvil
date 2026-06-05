@@ -21,7 +21,7 @@ from typing import Any
 import uvicorn
 from fastapi import FastAPI, Header, HTTPException, UploadFile
 from fastapi.responses import Response, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -60,7 +60,7 @@ def _sse_event(name: str, payload: object) -> str:
 
 class QueryRequest(BaseModel):
     question: str
-    k: int = 5
+    k: int = Field(5, ge=1, le=20)
     stream: bool = True
 
 
@@ -302,23 +302,6 @@ def create_app(
 
         if req.stream:
             # --- SSE streaming path ---
-            async def _event_generator():
-                async for event_type, payload in answer_stream(
-                    req.question,
-                    await _retriever.retrieve(req.question, req.k),
-                    chat=chat,
-                ):
-                    if event_type == "sources":
-                        # payload is list[ScoredChunk]
-                        yield _sse_event("sources", _sources_list(payload))
-                    elif event_type == "delta":
-                        # payload is str
-                        yield _sse_event("delta", {"text": payload})
-                    elif event_type == "done":
-                        # payload is KbAnswer — need the retrieved list to build citations
-                        # Re-retrieve is not ideal; instead we capture retrieved inside the gen
-                        pass
-
             # We need retrieved for citation serialisation in done event,
             # so we collect it upfront and drive the stream manually.
             async def _sse_generator():
@@ -329,7 +312,8 @@ def create_app(
                     chat=chat,
                 ):
                     if event_type == "sources":
-                        yield _sse_event("sources", _sources_list(retrieved))
+                        # payload is the retrieved list yielded by answer_stream
+                        yield _sse_event("sources", _sources_list(payload))
                     elif event_type == "delta":
                         yield _sse_event("delta", {"text": payload})
                     elif event_type == "done":
@@ -345,7 +329,7 @@ def create_app(
 
             return StreamingResponse(
                 _sse_generator(),
-                media_type="text/event-stream",
+                media_type="text/event-stream; charset=utf-8",
             )
 
         else:
