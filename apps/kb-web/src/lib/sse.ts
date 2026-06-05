@@ -1,4 +1,4 @@
-import type { QueryDone, Source } from "./types";
+import type { DebugFrame, QueryDone, Source } from "./types";
 import { BASE } from "./api";
 
 export interface SseCallbacks {
@@ -6,6 +6,15 @@ export interface SseCallbacks {
   onDelta(text: string): void;
   onDone(d: QueryDone): void;
   onError(e: Error): void;
+  /** Called when the SSE `debug` event is received (only when debug:true). */
+  onDebug?(d: DebugFrame): void;
+  /**
+   * Called when the stream ends (reader done) whether or not a `done` event
+   * was received. Use this for "stream-break guard": if the stream ended
+   * without a `done` event the caller can mark the turn as broken.
+   * @param receivedDone  true if a `done` event was dispatched before EOF
+   */
+  onStreamEnd?(receivedDone: boolean): void;
 }
 
 /**
@@ -15,12 +24,13 @@ export interface SseCallbacks {
  * SSE frame format (each frame terminated by "\n\n"):
  *   event: <name>\ndata: <single-line-json>\n\n
  *
- * Events: sources | delta | done
+ * Events: sources | delta | done | debug | error
  */
 export function streamQuery(
   question: string,
   k: number,
   cb: SseCallbacks,
+  debug?: boolean,
 ): () => void {
   const controller = new AbortController();
 
@@ -30,7 +40,7 @@ export function streamQuery(
       resp = await fetch(`${BASE}/v1/kb/query`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question, k, stream: true }),
+        body: JSON.stringify({ question, k, stream: true, ...(debug ? { debug: true } : {}) }),
         signal: controller.signal,
       });
     } catch (err) {
@@ -60,6 +70,8 @@ export function streamQuery(
     const decoder = new TextDecoder();
     // Buffer for incomplete frames across chunks
     let buffer = "";
+    // Track whether a `done` event was dispatched (for stream-break guard)
+    let receivedDone = false;
 
     try {
       while (true) {
@@ -74,7 +86,7 @@ export function streamQuery(
 
         for (const frame of frames) {
           if (!frame.trim()) continue;
-          dispatchFrame(frame.trim(), cb);
+          if (dispatchFrame(frame.trim(), cb)) receivedDone = true;
         }
       }
 
@@ -82,8 +94,11 @@ export function streamQuery(
       buffer += decoder.decode(undefined, { stream: false });
       // Process any final frame that wasn't followed by "\n\n"
       if (buffer.trim()) {
-        dispatchFrame(buffer.trim(), cb);
+        if (dispatchFrame(buffer.trim(), cb)) receivedDone = true;
       }
+
+      // Stream ended naturally — notify caller so it can handle断流兜底
+      cb.onStreamEnd?.(receivedDone);
     } catch (err) {
       if ((err as Error).name === "AbortError") {
         reader.cancel().catch(() => {});
@@ -98,8 +113,11 @@ export function streamQuery(
   return () => controller.abort();
 }
 
-/** Parse a single SSE frame and dispatch to the appropriate callback. */
-function dispatchFrame(frame: string, cb: SseCallbacks): void {
+/**
+ * Parse a single SSE frame and dispatch to the appropriate callback.
+ * Returns true if the `done` event was dispatched (signals clean stream end).
+ */
+function dispatchFrame(frame: string, cb: SseCallbacks): boolean {
   const lines = frame.split("\n");
   let eventName = "";
   let dataLine = "";
@@ -112,14 +130,14 @@ function dispatchFrame(frame: string, cb: SseCallbacks): void {
     }
   }
 
-  if (!dataLine) return;
+  if (!dataLine) return false;
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(dataLine);
   } catch {
     // Malformed JSON — skip
-    return;
+    return false;
   }
 
   switch (eventName) {
@@ -131,7 +149,14 @@ function dispatchFrame(frame: string, cb: SseCallbacks): void {
       break;
     case "done":
       cb.onDone(parsed as QueryDone);
+      return true;
+    case "debug":
+      cb.onDebug?.(parsed as DebugFrame);
+      break;
+    case "error":
+      cb.onError(new Error((parsed as { detail: string }).detail));
       break;
     // Unknown events are silently ignored
   }
+  return false;
 }

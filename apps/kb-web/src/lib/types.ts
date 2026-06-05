@@ -29,3 +29,24 @@ export interface QueryDone {
   text: string;
   citations: Citation[];
 }
+
+/** A single item in dense/sparse/fused arrays of the SSE `debug` frame. */
+export interface DebugItem {
+  n: number;
+  chunk_id: string;
+  quote_head: string;
+  score: number;
+  rank: number;
+  /** Only present in fused items: original ranks from each retriever. */
+  contributions?: {
+    dense: number | null;
+    sparse: number | null;
+  };
+}
+
+/** Payload of the SSE `debug` event (arrives before `sources`). */
+export interface DebugFrame {
+  dense: DebugItem[];
+  sparse: DebugItem[];
+  fused: DebugItem[];
+}

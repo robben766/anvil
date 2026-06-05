@@ -2,7 +2,8 @@
 
 import { useRef, useState } from "react";
 import { streamQuery } from "@/lib/sse";
-import type { Citation, QueryDone, Source } from "@/lib/types";
+import type { Citation, DebugFrame, QueryDone, Source } from "@/lib/types";
+import DebugPanel from "./DebugPanel";
 
 /** A single answered turn kept in history. */
 interface Turn {
@@ -17,6 +18,10 @@ interface Turn {
   error: string | null;
   /** Sources list is expanded? */
   sourcesOpen: boolean;
+  /** Debug frame received from SSE `debug` event (only when debug mode on). */
+  debugFrame: DebugFrame | null;
+  /** Debug panel is expanded? (defaults true when frame arrives) */
+  debugOpen: boolean;
 }
 
 interface Props {
@@ -28,6 +33,8 @@ export default function ChatPanel({ onCite }: Props) {
   const [question, setQuestion] = useState("");
   const [turns, setTurns] = useState<Turn[]>([]);
   const [streaming, setStreaming] = useState(false);
+  // Debug mode persists across turns (user-controlled checkbox)
+  const [debugMode, setDebugMode] = useState(false);
   const abortRef = useRef<(() => void) | null>(null);
   const nextId = useRef(0);
 
@@ -46,6 +53,8 @@ export default function ChatPanel({ onCite }: Props) {
       streaming: true,
       error: null,
       sourcesOpen: false,
+      debugFrame: null,
+      debugOpen: true,
     };
     setTurns((prev) => [...prev, newTurn]);
     setStreaming(true);
@@ -56,29 +65,55 @@ export default function ChatPanel({ onCite }: Props) {
       );
     }
 
-    const abort = streamQuery(q, 5, {
-      onSources(s) {
-        patchTurn({ sources: s });
+    const abort = streamQuery(
+      q,
+      5,
+      {
+        onSources(s) {
+          patchTurn({ sources: s });
+        },
+        onDelta(text) {
+          setTurns((prev) =>
+            prev.map((t) =>
+              t.id === id ? { ...t, answer: t.answer + text } : t,
+            ),
+          );
+        },
+        onDone(d: QueryDone) {
+          // done.text 是后端保证的完整答案(B2 测试断言 delta 拼接 == done.text),覆盖累计值以消除任何流式拼接误差
+          patchTurn({
+            answer: d.text,
+            citations: d.citations,
+            streaming: false,
+          });
+          setStreaming(false);
+          abortRef.current = null;
+        },
+        onError(e) {
+          patchTurn({ error: e.message, streaming: false });
+          setStreaming(false);
+          abortRef.current = null;
+        },
+        onDebug(frame) {
+          patchTurn({ debugFrame: frame, debugOpen: true });
+        },
+        onStreamEnd(receivedDone) {
+          // 断流兜底: 流自然结束但未收到 done 事件 → 标记为意外中断
+          if (!receivedDone) {
+            setTurns((prev) =>
+              prev.map((t) =>
+                t.id === id && t.streaming
+                  ? { ...t, error: "流意外中断", streaming: false }
+                  : t,
+              ),
+            );
+            setStreaming(false);
+            abortRef.current = null;
+          }
+        },
       },
-      onDelta(text) {
-        setTurns((prev) =>
-          prev.map((t) =>
-            t.id === id ? { ...t, answer: t.answer + text } : t,
-          ),
-        );
-      },
-      onDone(d: QueryDone) {
-        // done.text 是后端保证的完整答案(B2 测试断言 delta 拼接 == done.text),覆盖累计值以消除任何流式拼接误差
-        patchTurn({ answer: d.text, citations: d.citations, streaming: false });
-        setStreaming(false);
-        abortRef.current = null;
-      },
-      onError(e) {
-        patchTurn({ error: e.message, streaming: false });
-        setStreaming(false);
-        abortRef.current = null;
-      },
-    });
+      debugMode,
+    );
 
     abortRef.current = abort;
   }
@@ -124,6 +159,15 @@ export default function ChatPanel({ onCite }: Props) {
                 ),
               )
             }
+            onToggleDebug={() =>
+              setTurns((prev) =>
+                prev.map((t) =>
+                  t.id === turn.id
+                    ? { ...t, debugOpen: !t.debugOpen }
+                    : t,
+                ),
+              )
+            }
           />
         ))}
       </div>
@@ -140,22 +184,33 @@ export default function ChatPanel({ onCite }: Props) {
             onChange={(e) => setQuestion(e.target.value)}
             onKeyDown={handleKeyDown}
           />
-          {streaming ? (
-            <button
-              onClick={handleStop}
-              className="shrink-0 rounded bg-red-100 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-200"
-            >
-              停止
-            </button>
-          ) : (
-            <button
-              onClick={startQuery}
-              disabled={!question.trim()}
-              className="shrink-0 rounded bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-40"
-            >
-              发送
-            </button>
-          )}
+          <div className="flex flex-col gap-2 items-end">
+            <label className="flex items-center gap-1.5 text-xs text-slate-500 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={debugMode}
+                onChange={(e) => setDebugMode(e.target.checked)}
+                className="rounded"
+              />
+              调试
+            </label>
+            {streaming ? (
+              <button
+                onClick={handleStop}
+                className="shrink-0 rounded bg-red-100 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-200"
+              >
+                停止
+              </button>
+            ) : (
+              <button
+                onClick={startQuery}
+                disabled={!question.trim()}
+                className="shrink-0 rounded bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-40"
+              >
+                发送
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -168,9 +223,10 @@ interface TurnCardProps {
   turn: Turn;
   onCite(c: Citation): void;
   onToggleSources(): void;
+  onToggleDebug(): void;
 }
 
-function TurnCard({ turn, onCite, onToggleSources }: TurnCardProps) {
+function TurnCard({ turn, onCite, onToggleSources, onToggleDebug }: TurnCardProps) {
   return (
     <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
       {/* Question header */}
@@ -179,6 +235,29 @@ function TurnCard({ turn, onCite, onToggleSources }: TurnCardProps) {
       </div>
 
       <div className="px-4 py-3 space-y-3">
+        {/* Debug panel — appears above sources, collapsible, default expanded */}
+        {turn.debugFrame && (
+          <div>
+            <button
+              onClick={onToggleDebug}
+              className="flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-900"
+            >
+              <span
+                className={`transition-transform ${turn.debugOpen ? "rotate-90" : ""}`}
+              >
+                ▶
+              </span>
+              检索调试（dense {turn.debugFrame.dense.length} / sparse{" "}
+              {turn.debugFrame.sparse.length} / fused {turn.debugFrame.fused.length}）
+            </button>
+            {turn.debugOpen && (
+              <div className="mt-2">
+                <DebugPanel frame={turn.debugFrame} />
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Sources collapsible */}
         {turn.sources.length > 0 && (
           <div>
