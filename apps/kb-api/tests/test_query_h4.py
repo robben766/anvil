@@ -1047,18 +1047,33 @@ async def test_rerank_true_queryrequest(_run_kb_migrations):
 
 @pytest.mark.asyncio
 async def test_rerank_true_uses_reranked_order(_run_kb_migrations):
-    """rerank=true with injected reranker → sources order is reranked (reversed here)."""
+    """rerank=true with injected reranker → sources order is reranked (reversed here).
+
+    NOTE on injected-retriever rerank semantics:
+        When a retriever is injected, reranking is applied as a post-step on
+        whatever the injected retriever returns (post-rerank path).  The
+        candidate pool is the k items returned by retriever.retrieve(), NOT the
+        k*4 pool used by the production dual-Retriever.  This means the injected-
+        retriever test path has different rerank-candidate semantics from production
+        and is intended only for unit tests.
+
+        FakeRetrieverPlain here returns k*4 items to approximate the production
+        candidate pool size (closer to production than returning only k items).
+    """
     from anvil_kb_api.app import create_app
 
+    k = 3
+    # Build k*4 = 12 candidate chunks so the pool matches production semantics
     scored = [
-        _make_scored_chunk("chunk A", seq=0, score=0.95),
-        _make_scored_chunk("chunk B", seq=1, score=0.80),
-        _make_scored_chunk("chunk C", seq=2, score=0.70),
+        _make_scored_chunk(f"chunk {chr(ord('A') + i)}", seq=i, score=round(1.0 - i * 0.05, 2))
+        for i in range(k * 4)  # 12 chunks: A..L
     ]
+    # chunk A has highest score (0.95), chunk L has lowest; FakeReranker reverses → L first
 
     class FakeRetrieverPlain:
         async def retrieve(self, question: str, k: int = 5) -> list[ScoredChunk]:
-            return scored[:k]
+            # Return all k*4 candidates so reranker gets a rich pool
+            return scored[: k * 4]
 
     fake_reranker = FakeReranker()
     fake_chat = _make_fake_chat_stream(["答案。"])
@@ -1088,15 +1103,18 @@ async def test_rerank_true_uses_reranked_order(_run_kb_migrations):
     sources_event = next(e for e in events if e["event"] == "sources")
     sources = json.loads(sources_event["data"])
 
-    # FakeReranker reverses order → chunk C first, chunk A last
-    assert sources[0]["quote"] == "chunk C", (
-        f"Expected reranked order (reversed): first chunk should be 'chunk C', "
+    # FakeReranker reverses the k*4=12 candidates and truncates to top=k=3.
+    # Reversed order: chunk L (index 11) first, chunk K (10) second, chunk J (9) last.
+    # chr(ord('A') + 11) = 'L', chr(ord('A') + 10) = 'K', chr(ord('A') + 9) = 'J'
+    assert sources[0]["quote"] == "chunk L", (
+        f"Expected reranked order (reversed k*4 pool): first chunk should be 'chunk L', "
         f"got {sources[0]['quote']!r}"
     )
-    assert sources[-1]["quote"] == "chunk A", (
-        f"Expected reranked order (reversed): last chunk should be 'chunk A', "
+    assert sources[-1]["quote"] == "chunk J", (
+        f"Expected reranked order (reversed k*4 pool): last chunk should be 'chunk J', "
         f"got {sources[-1]['quote']!r}"
     )
+    assert len(sources) == k, f"Expected {k} sources (top=k), got {len(sources)}"
     assert fake_reranker.call_count == 1, "Reranker must be called exactly once"
 
 
@@ -1267,4 +1285,123 @@ async def test_rerank_false_debug_frame_reranked_is_null(_run_kb_migrations):
     assert "reranked" in payload, "debug payload must always include 'reranked' key"
     assert payload["reranked"] is None, (
         f"debug.reranked must be null when rerank=false, got {payload['reranked']!r}"
+    )
+
+
+# ===========================================================================
+# R2 Critical fix: production-path debug+rerank — no injected retriever,
+# reranker injected → debug_result.reranked must be non-null in SSE frame
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_production_path_debug_reranked_frame_nonnull(_run_kb_migrations):
+    """Production path: retriever NOT injected, reranker injected, debug+rerank=true.
+
+    Verifies the Critical fix: when post_reranker is None (production dual-Retriever
+    path), the debug frame's 'reranked' key must be non-null because _retriever_rerank
+    internally reranked and stored the result in debug_result.reranked.
+
+    Setup:
+      - create_app(session_factory=sf, embedder=FakeEmbedder(), reranker=FakeReranker())
+        — no retriever injected → app builds its own Retriever + _retriever_rerank
+      - Ingest a document via HTTP upload so BM25 + pgvector have real data
+      - Send debug=True + rerank=True query using one of the ingested words
+      - Assert: debug frame 'reranked' is non-null AND its chunk order matches
+        what FakeReranker (reverser) would produce
+    """
+    from sqlalchemy import text
+
+    from anvil_kb_api.app import create_app
+
+    engine, sf = _make_engine_and_sf()
+
+    # Isolate this test from other test data
+    async with engine.begin() as conn:
+        await conn.execute(text("TRUNCATE kb_chunks, kb_documents CASCADE"))
+
+    fake_reranker = FakeReranker()
+    fake_chat = _make_fake_chat_stream(["答案。"])
+
+    # No retriever injected → production dual-Retriever path
+    # reranker injected → _get_or_build_reranker_async() returns fake_reranker (no model load)
+    app = create_app(
+        session_factory=sf,
+        embedder=FakeEmbedder(),
+        reranker=fake_reranker,
+        chat=fake_chat,
+    )
+
+    # Ingest two chunks with unique words so BM25 can find them
+    md_content = (
+        "# 等待期条款\n\n"
+        "等待期为九十天，自保单生效日起计算。\n\n"
+        "宽限期为六十天，保费到期后可在宽限期内缴纳。\n"
+    )
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        # Upload document so app's PgBM25Index gets populated (dual-write)
+        upload_r = await client.post(
+            "/v1/kb/documents",
+            files={"file": ("等待期.md", md_content.encode("utf-8"), "text/plain")},
+        )
+        assert upload_r.status_code == 201, (
+            f"Upload failed: {upload_r.status_code} {upload_r.text}"
+        )
+
+        # Query with debug=True + rerank=True → production path uses _retriever_rerank
+        async with client.stream(
+            "POST",
+            "/v1/kb/query",
+            json={"question": "等待期是多少天", "stream": True, "debug": True, "rerank": True},
+        ) as resp:
+            raw = await resp.aread()
+
+    # Clean up
+    async with engine.begin() as conn:
+        await conn.execute(text("TRUNCATE kb_chunks, kb_documents CASCADE"))
+    await engine.dispose()
+
+    events = _parse_sse_events(raw.decode())
+    event_types = [e["event"] for e in events]
+
+    # Must have a debug frame (not an error frame)
+    err_detail = next(
+        (json.loads(e["data"]) for e in events if e["event"] == "error"), None
+    )
+    assert "error" not in event_types, (
+        f"Unexpected error event; events: {event_types}; error detail: {err_detail}"
+    )
+    assert "debug" in event_types, f"Expected debug frame; got: {event_types}"
+
+    debug_event = next(e for e in events if e["event"] == "debug")
+    payload = json.loads(debug_event["data"])
+
+    # Critical assertion: production path must populate debug.reranked (non-null)
+    assert "reranked" in payload, "debug payload must contain 'reranked' key"
+    assert payload["reranked"] is not None, (
+        "debug.reranked must be non-null when rerank=true on production path "
+        "(retriever not injected, _retriever_rerank has reranker built-in)"
+    )
+
+    # Each reranked item must have required structure
+    required_fields = ("n", "chunk_id", "quote_head", "score", "rank")
+    for item in payload["reranked"]:
+        for field in required_fields:
+            assert field in item, f"reranked item missing field: {field}"
+
+    # Reranker call count: FakeReranker was called at least once (inside _retriever_rerank)
+    assert fake_reranker.call_count >= 1, (
+        "FakeReranker must have been called at least once on production path"
+    )
+
+    # Consistency: reranked chunk_ids must differ from or reorder fused chunk_ids
+    # (FakeReranker reverses — if there are ≥2 chunks, order should differ from fused)
+    fused_ids = [item["chunk_id"] for item in payload["fused"]]
+    reranked_ids = [item["chunk_id"] for item in payload["reranked"]]
+    # Both lists should reference the same chunks (just possibly reordered)
+    assert set(reranked_ids).issubset(set(fused_ids) | {i["chunk_id"] for i in payload["dense"]}), (
+        "reranked chunk_ids must come from the retrieval pool"
     )

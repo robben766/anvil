@@ -12,6 +12,7 @@ Auth: set ANVIL_KB_API_KEY to require Bearer token on all endpoints.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import secrets
@@ -203,6 +204,15 @@ def create_app(
         The reranker for _retriever_rerank is:
           - injected `reranker` param (tests / custom deployment), OR
           - a module-level shared FastEmbedReranker (lazy-loaded on first rerank=true request)
+
+    NOTE on injected retriever semantics:
+        When a ``retriever`` is injected (test path), reranking is applied as a
+        post-step on whatever the injected retriever returns (``post_reranker``
+        path).  The candidate pool is therefore the k items returned by
+        ``retriever.retrieve()``, NOT the k*4 pool used by the production
+        dual-Retriever.  This means the injected-retriever test path has
+        different rerank-candidate semantics from production and is intended
+        only for unit tests.
     """
     # Resolve dependencies
     if session_factory is None:
@@ -229,14 +239,23 @@ def create_app(
     _injected_reranker = reranker
     # Mutable container so closure can assign
     _shared_reranker: list[Any] = []  # _shared_reranker[0] once initialised
+    # asyncio.Lock eliminates TOCTOU race when multiple concurrent requests trigger
+    # the first rerank=true call simultaneously (lazy-load is not idempotent because
+    # FastEmbedReranker downloads / loads the model on construction).
+    _reranker_lock: asyncio.Lock = asyncio.Lock()
 
-    def _get_or_build_reranker() -> Any:
-        """Return the effective reranker: injected takes priority, else lazy-create shared."""
+    async def _get_or_build_reranker_async() -> Any:
+        """Return the effective reranker: injected takes priority, else lazy-create shared.
+
+        Uses asyncio.Lock to prevent double-initialisation under concurrent requests
+        (TOCTOU guard: check-then-build is now atomic within the event loop).
+        """
         if _injected_reranker is not None:
             return _injected_reranker
-        if not _shared_reranker:
-            from anvil_kb.retrieve.rerank import FastEmbedReranker
-            _shared_reranker.append(FastEmbedReranker())
+        async with _reranker_lock:
+            if not _shared_reranker:
+                from anvil_kb.retrieve.rerank import FastEmbedReranker
+                _shared_reranker.append(FastEmbedReranker())
         return _shared_reranker[0]
 
     if retriever is None:
@@ -456,7 +475,7 @@ def create_app(
         #   - If no retriever was injected, use (or lazily build) a Retriever with reranker.
         # When rerank=false:
         #   - Always use _retriever (zero behaviour change).
-        def _effective_retriever_and_reranker():
+        async def _effective_retriever_and_reranker():
             """Return (active_retriever, post_reranker_or_None).
 
             post_reranker_or_None is the reranker to apply manually after retrieve()
@@ -479,14 +498,14 @@ def create_app(
                         store,
                         sparse_index=sparse_index,
                         mode="hybrid",
-                        reranker=_get_or_build_reranker(),
+                        reranker=await _get_or_build_reranker_async(),
                     )
                 return _retriever_rerank, None
             else:
                 # Injected retriever — apply the effective reranker manually after retrieve
-                return _retriever, _get_or_build_reranker()
+                return _retriever, await _get_or_build_reranker_async()
 
-        active_retriever, post_reranker = _effective_retriever_and_reranker()
+        active_retriever, post_reranker = await _effective_retriever_and_reranker()
 
         if req.stream:
             # --- SSE streaming path ---
@@ -497,11 +516,21 @@ def create_app(
                         debug_result = await active_retriever.retrieve_debug(req.question, req.k)
                         fused_candidates = debug_result.fused
 
-                        # R2: if rerank=true, apply reranker to the fused candidates
+                        # R2: apply reranker to fused candidates
+                        # Three cases:
+                        #   1. rerank=true + post_reranker set → injected-retriever test path:
+                        #      apply reranker manually on fused_candidates.
+                        #   2. rerank=true + post_reranker=None → production path:
+                        #      _retriever_rerank already ran the reranker internally;
+                        #      debug_result.reranked holds the result.
+                        #   3. rerank=false → no reranking; reranked_chunks stays None.
                         if req.rerank and post_reranker is not None:
                             reranked_chunks = post_reranker.rerank(
                                 req.question, fused_candidates, top=req.k
                             )
+                        elif req.rerank:
+                            # Production path: Retriever internally reranked; take from debug
+                            reranked_chunks = debug_result.reranked
                         else:
                             reranked_chunks = None
 
