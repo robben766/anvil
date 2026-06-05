@@ -28,6 +28,10 @@ jobs:
       - uses: astral-sh/setup-uv@v4
         with:
           python-version: "3.12"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/fastembed
+          key: fastembed-bge-small-zh-v1.5
       - run: uv sync --all-packages
       - run: uv run ruff check .
       - run: cd packages/core/gateway && uv run alembic upgrade head
