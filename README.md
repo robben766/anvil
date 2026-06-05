@@ -52,7 +52,8 @@ uv run pytest -m "not live" -q
 | anvil-gateway | M5 | 多 provider 统一调用 / fallback / 缓存计账 |
 | anvil-obs | M3 | 自研 OTEL span + Langfuse 导出 |
 | anvil-eval | M4 | 手写 RAGAS 四指标 + golden CI 门禁 |
-| anvil-kb | KB-M1a | hand-rolled RAG:chunker/pgvector/retriever/generate;CLI ingest/query/eval |
+| anvil-kb | KB-M1b | hand-rolled RAG:chunker/pgvector/retriever/generate;CLI ingest/query/eval |
+| kb-web | KB-M1b | 知识库问答前端:Next.js 16 + SSE 流式答案 |
 
 ## 进度
 
@@ -62,3 +63,25 @@ uv run pytest -m "not live" -q
 - [x] M4 eval:手写 RAGAS 四指标 + golden set CI 门禁 → `anvil-eval run --dataset packages/core/eval/golden/demo.jsonl`
 - [x] M5 proxy:OpenAI 兼容 HTTP proxy shell(非流式 + SSE),curl 实测 DeepSeek → [examples/03-proxy](examples/03-proxy/)
 - [x] KB-M1a 通用知识库核心:chunker / PgVectorStore / pipeline / Retriever / generate + CLI → `anvil-kb eval --dataset packages/kb/golden/kb.jsonl --corpus packages/kb/golden/corpus`
+- [x] KB-M1b 知识库产品:FastAPI kb-api(SSE) + Next.js 前端 + CI web job
+
+## 知识库产品(apps/)
+
+三步启动全套知识库产品:
+
+```bash
+# 1. 启动 PostgreSQL(含 pgvector)
+docker compose -f infra/docker-compose.yml up -d anvil-postgres
+
+# 2. 启动知识库 API(端口 8400)
+uv run anvil-kb-api
+
+# 3. 启动前端(端口 3000)
+cd apps/kb-web && pnpm install && pnpm dev
+```
+
+可选:先灌入演示语料(golden corpus),让问答有内容可检索:
+
+```bash
+uv run anvil-kb eval --dataset packages/kb/golden/kb.jsonl --corpus packages/kb/golden/corpus
+```

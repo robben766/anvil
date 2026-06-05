@@ -1,5 +1,5 @@
 [tool.uv.workspace]
-members = ["packages/core/*", "packages/kb"]
+members = ["packages/core/*", "packages/kb", "apps/kb-api"]
 
 [tool.ruff]
 line-length = 100
@@ -11,7 +11,7 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 markers = ["live: real API calls; run manually with -m live"]
-testpaths = ["packages"]
+testpaths = ["packages", "apps"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["anvil_gateway", "anvil_kb"]
+known-first-party = ["anvil_gateway", "anvil_kb", "anvil_kb_api"]
