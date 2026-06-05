@@ -81,12 +81,13 @@ async def test_upload_list_get_delete(api_client: httpx.AsyncClient):
 
 @pytest.mark.asyncio
 async def test_upload_wrong_extension_returns_400(api_client: httpx.AsyncClient):
-    """Non-.md/.txt file should return 400."""
+    """真正不在白名单的扩展名(.jpg)应 400(.pdf 自 KB-M4 起已是合法类型)。"""
     response = await api_client.post(
         "/v1/kb/documents",
-        files={"file": ("doc.pdf", b"%PDF content", "application/pdf")},
+        files={"file": ("doc.jpg", b"\xff\xd8\xff jpeg bytes", "image/jpeg")},
     )
     assert response.status_code == 400
+    assert "unsupported file type" in response.json()["detail"]
 
 
 @pytest.mark.asyncio

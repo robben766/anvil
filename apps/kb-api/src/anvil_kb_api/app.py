@@ -304,7 +304,7 @@ def create_app(
         if suffix not in _ALLOWED_EXTENSIONS:
             raise HTTPException(
                 status_code=400,
-                detail=f"unsupported file type '{suffix}'; allowed: .md, .txt",
+                detail=f"unsupported file type '{suffix}'; allowed: .md, .txt, .pdf",
             )
 
         raw = await file.read()
