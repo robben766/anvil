@@ -42,3 +42,28 @@ def test_siblings_share_trace_under_same_root():
             pass
     assert a.trace_id == b.trace_id == r.trace_id
     assert a.parent_span_id == b.parent_span_id == r.span_id
+
+
+def test_context_restored_after_inner_exception():
+    with span("outer") as outer:
+        try:
+            with span("inner"):
+                raise ValueError("boom")
+        except ValueError:
+            pass
+        assert current_span() is outer
+    assert current_span() is None
+
+
+async def test_concurrent_tasks_isolated():
+    import asyncio
+
+    async def make_span(name):
+        with span(name) as s:
+            await asyncio.sleep(0.01)
+            assert current_span() is s
+        return s
+
+    a, b = await asyncio.gather(make_span("a"), make_span("b"))
+    assert a.trace_id != b.trace_id  # 各自独立的根 trace
+    assert current_span() is None
