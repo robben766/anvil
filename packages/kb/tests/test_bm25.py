@@ -118,6 +118,7 @@ IDF 计算(Okapi +1 平滑):  idf(t) = ln((N-df+0.5)/(df+0.5) + 1)
 from __future__ import annotations
 
 import math
+import os
 import uuid
 
 import pytest
@@ -131,7 +132,11 @@ from anvil_kb.store.bm25 import K1, B, PgBM25Index, tokenize
 # ─────────────────────────────────────────────────────────────────────
 # 测试辅助常量(与手算对齐)
 # ─────────────────────────────────────────────────────────────────────
-TEST_DB_URL = "postgresql+asyncpg://anvil:anvil@localhost:5434/anvil_test"
+# 与 conftest 同口径:CI 里 ANVIL_TEST_DATABASE_URL 指向 anvil 库,本地默认 anvil_test
+TEST_DB_URL = os.environ.get(
+    "ANVIL_TEST_DATABASE_URL",
+    "postgresql+asyncpg://anvil:anvil@localhost:5434/anvil_test",
+)
 
 # 手算精度:误差 1e-6
 APPROX_REL = 1e-6
