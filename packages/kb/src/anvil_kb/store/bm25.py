@@ -75,7 +75,12 @@ class PgBM25Index:
                 )
 
                 for chunk in chunks:
-                    tokens = tokenize(chunk.content)
+                    text_to_index = (
+                        chunk.context_prefix + "\n" + chunk.content
+                        if chunk.context_prefix
+                        else chunk.content
+                    )
+                    tokens = tokenize(text_to_index)
                     tf_counter = Counter(tokens)
                     token_count = len(tokens)
 

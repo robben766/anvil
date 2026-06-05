@@ -1,13 +1,14 @@
 """CLI: anvil-kb ingest / query / eval
 
-anvil-kb ingest <file.md ...>
+anvil-kb ingest <file.md ...> [--enrich]
     title=stem; source_name=relative path from cwd.
+    --enrich: enable Contextual Retrieval enrichment via anvil_gateway.chat.
 
 anvil-kb query "<question>" [--k 5]
     Retrieve + generate; prints answer and citations.
     Requires DEEPSEEK_API_KEY (loaded from .env automatically).
 
-anvil-kb eval --dataset <kb.jsonl> --corpus <dir> [--k 5] [--recall-threshold 0.8]
+anvil-kb eval --dataset <kb.jsonl> --corpus <dir> [--k 5] [--recall-threshold 0.8] [--enrich]
     Ingest all .md in corpus (idempotent), then evaluate retrieval only (no LLM).
     Exit 0 if mean recall@k >= threshold, else exit 1.
 """
@@ -17,7 +18,83 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Enrichment cost accounting (public surface for tests)
+# ---------------------------------------------------------------------------
+
+_ENRICH_SESSION_ID = "anvil-kb-enrich"
+
+
+def summarize_enrich_usage(rows) -> dict:
+    """Aggregate UsageRecordRow sequence into enrichment cost summary.
+
+    Accepts either ORM row objects (attribute access) or plain dicts.
+    Fields read: prompt_tokens, cached_tokens, cost_cny.
+
+    Returns:
+        dict with keys: calls, prompt_tokens, cached_tokens,
+                        cache_hit_rate (float), cost (Decimal).
+    """
+
+    def _get(row, field):
+        if isinstance(row, dict):
+            return row[field]
+        return getattr(row, field)
+
+    calls = 0
+    total_prompt = 0
+    total_cached = 0
+    total_cost = Decimal("0")
+
+    for row in rows:
+        calls += 1
+        total_prompt += _get(row, "prompt_tokens")
+        total_cached += _get(row, "cached_tokens")
+        total_cost += Decimal(str(_get(row, "cost_cny"))) if not isinstance(
+            _get(row, "cost_cny"), Decimal
+        ) else _get(row, "cost_cny")
+
+    cache_hit_rate = (total_cached / total_prompt) if total_prompt > 0 else 0.0
+
+    return {
+        "calls": calls,
+        "prompt_tokens": total_prompt,
+        "cached_tokens": total_cached,
+        "cache_hit_rate": cache_hit_rate,
+        "cost": total_cost,
+    }
+
+
+async def _query_enrich_usage(since: datetime) -> list:
+    """Query usage_records for anvil-kb-enrich session rows since *since*.
+
+    Uses an async SQLAlchemy engine (asyncpg) to stay compatible with the
+    single-driver venv (no psycopg2 available).
+    Returns a list of row mappings with keys: prompt_tokens, cached_tokens, cost_cny.
+    """
+    import os  # noqa: PLC0415
+
+    from sqlalchemy import select  # noqa: PLC0415
+    from sqlalchemy.ext.asyncio import create_async_engine  # noqa: PLC0415
+
+    from anvil_gateway.db import UsageRecordRow  # noqa: PLC0415
+
+    url = os.environ.get("ANVIL_DATABASE_URL", "")
+    engine = create_async_engine(url)
+    async with engine.connect() as conn:
+        stmt = select(UsageRecordRow).where(
+            UsageRecordRow.session_id == _ENRICH_SESSION_ID,
+            UsageRecordRow.created_at >= since,
+        )
+        result = await conn.execute(stmt)
+        rows = result.mappings().all()
+    await engine.dispose()
+    return list(rows)
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers (public surface for tests)
@@ -49,11 +126,21 @@ def _make_components():
     return embedder, session_factory
 
 
-async def _run_ingest_command(files: list[str], embedder, session_factory) -> None:
+async def _run_ingest_command(
+    files: list[str], embedder, session_factory, *, enrich: bool = False
+) -> None:
     from anvil_kb.ingest.pdf import parse_pdf
     from anvil_kb.ingest.pipeline import ingest_markdown
     from anvil_kb.store.bm25 import PgBM25Index
     from anvil_kb.store.pg import PgVectorStore
+
+    # Capture start time before ingestion begins (for usage ledger query)
+    run_start = datetime.now(tz=UTC)
+
+    enrich_chat = None
+    if enrich:
+        import anvil_gateway  # noqa: PLC0415
+        enrich_chat = anvil_gateway.chat
 
     store = PgVectorStore(session_factory)
     bm25 = PgBM25Index(session_factory)
@@ -77,8 +164,19 @@ async def _run_ingest_command(files: list[str], embedder, session_factory) -> No
             embedder=embedder,
             store=store,
             sparse_index=bm25,
+            enrich_chat=enrich_chat,
         )
         print(f"ingested: {source_name!r}  title={title!r}  chunks={n_chunks}")
+
+    if enrich:
+        rows = await _query_enrich_usage(since=run_start)
+        summary = summarize_enrich_usage(rows)
+        print(
+            f"enrich: {summary['calls']} calls, "
+            f"{summary['prompt_tokens']} prompt tokens, "
+            f"cache hit {summary['cache_hit_rate']:.1%}, "
+            f"cost ¥{summary['cost']}"
+        )
 
 
 async def _run_query_command(
@@ -189,6 +287,7 @@ async def _run_eval_with_ingest(
     session_factory,
     mode: str = "hybrid",
     rerank: bool = False,
+    enrich: bool = False,
 ) -> None:
     """Ingest corpus then run eval loop.
 
@@ -203,6 +302,13 @@ async def _run_eval_with_ingest(
     from anvil_kb.retrieve.retriever import Retriever
     from anvil_kb.store.bm25 import PgBM25Index
     from anvil_kb.store.pg import PgVectorStore
+
+    enrich_chat = None
+    run_start: datetime | None = None
+    if enrich:
+        run_start = datetime.now(tz=UTC)
+        import anvil_gateway  # noqa: PLC0415
+        enrich_chat = anvil_gateway.chat
 
     # Ingest corpus
     store = PgVectorStore(session_factory)
@@ -232,8 +338,20 @@ async def _run_eval_with_ingest(
             embedder=embedder,
             store=store,
             sparse_index=sparse_index,
+            enrich_chat=enrich_chat,
         )
         print(f"  {source_name}  ({n_chunks} chunks)")
+
+    # Print enrichment cost report after corpus ingest (before eval)
+    if enrich and run_start is not None:
+        rows = await _query_enrich_usage(since=run_start)
+        summary = summarize_enrich_usage(rows)
+        print(
+            f"enrich: {summary['calls']} calls, "
+            f"{summary['prompt_tokens']} prompt tokens, "
+            f"cache hit {summary['cache_hit_rate']:.1%}, "
+            f"cost ¥{summary['cost']}"
+        )
 
     # Build reranker if requested
     reranker = None
@@ -267,6 +385,12 @@ def _build_parser() -> argparse.ArgumentParser:
     # --- ingest ---
     ingest_p = sub.add_parser("ingest", help="Ingest markdown file(s) into the knowledge base")
     ingest_p.add_argument("files", nargs="+", help="Markdown file paths to ingest")
+    ingest_p.add_argument(
+        "--enrich",
+        action="store_true",
+        default=False,
+        help="Enable Contextual Retrieval enrichment via anvil_gateway.chat",
+    )
 
     # --- query ---
     query_p = sub.add_parser("query", help="Retrieve + generate an answer")
@@ -305,6 +429,12 @@ def _build_parser() -> argparse.ArgumentParser:
         default=False,
         help="Enable cross-encoder reranking (FastEmbedReranker; loads ~1GB model on first use)",
     )
+    eval_p.add_argument(
+        "--enrich",
+        action="store_true",
+        default=False,
+        help="Enable Contextual Retrieval enrichment via anvil_gateway.chat",
+    )
 
     return parser
 
@@ -326,7 +456,7 @@ def main() -> None:
 
     if args.command == "ingest":
         embedder, session_factory = _make_components()
-        asyncio.run(_run_ingest_command(args.files, embedder, session_factory))
+        asyncio.run(_run_ingest_command(args.files, embedder, session_factory, enrich=args.enrich))
 
     elif args.command == "query":
         embedder, session_factory = _make_components()
@@ -348,6 +478,7 @@ def main() -> None:
                 session_factory=session_factory,
                 mode=args.mode,
                 rerank=args.rerank,
+                enrich=args.enrich,
             )
         )
 

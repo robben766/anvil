@@ -52,8 +52,8 @@ uv run pytest -m "not live" -q
 | anvil-gateway | M5 | 多 provider 统一调用 / fallback / 缓存计账 |
 | anvil-obs | M3 | 自研 OTEL span + Langfuse 导出 |
 | anvil-eval | M4 | 手写 RAGAS 四指标 + golden CI 门禁 |
-| anvil-kb | KB-M4 | hand-rolled RAG:chunker/pgvector/BM25/RRF 混合检索 + Cross-Encoder rerank + .pdf 解析（pdfplumber，无 LLM）;CLI ingest/query/eval --mode dense\|sparse\|hybrid [--rerank] |
-| kb-web | KB-M4 | 知识库问答前端:Next.js 16 + SSE 流式答案 + 调试视图（四列：dense/BM25/RRF/Cross-Encoder）+ .pdf 上传 |
+| anvil-kb | KB-M5 | hand-rolled RAG:chunker/pgvector/BM25/RRF 混合检索 + Cross-Encoder rerank + .pdf 解析（pdfplumber，无 LLM）+ Contextual Retrieval（LLM 富集 context_prefix，prompt cache hit ~89%）;CLI ingest/query/eval --mode dense\|sparse\|hybrid [--rerank] [--enrich] |
+| kb-web | KB-M5 | 知识库问答前端:Next.js 16 + SSE 流式答案 + 调试视图（四列：dense/BM25/RRF/Cross-Encoder）+ .pdf 上传 |
 
 ## 进度
 
@@ -67,6 +67,7 @@ uv run pytest -m "not live" -q
 - [x] KB-M2 混合检索对比:BM25 稀疏索引 + RRF 融合 + 调试视图 → hybrid MRR=0.881
 - [x] KB-M3 重排实验:bge-reranker-base Cross-Encoder → hybrid+rerank MRR=0.929（+5.4%，延迟 ~3s）
 - [x] KB-M4 PDF 解析:hand-rolled pdfplumber 解析器（页眉/页脚/表格版面陷阱）;eval --corpus 支持 .pdf;零损耗验证（PDF 管线 recall@5=1.000，MRR=0.893 vs .md 基线 0.881）
+- [x] KB-M5 Contextual Retrieval:LLM 富集 context_prefix（`--enrich`）;prompt cache hit ~89%;hybrid+enrich+rerank MRR=0.929;**P1 必做里程碑全部完成**
 
 ## 知识库产品(apps/)
 

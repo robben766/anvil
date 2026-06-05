@@ -44,3 +44,46 @@ async def test_delete_document_removes_chunks(kb_store):
 
 async def test_delete_document_nonexistent_is_silent(kb_store):
     await kb_store.delete_document(uuid.uuid4())  # 不应抛出
+
+
+# ── context_prefix roundtrip ──────────────────────────────────────────────────
+
+
+async def test_upsert_and_search_returns_context_prefix(kb_store):
+    """upsert 后 search 回读 context_prefix 保真。"""
+    doc = _doc("ctx-prefix-doc")
+    chunk = Chunk(
+        id=uuid.uuid4(),
+        document_id=doc.id,
+        seq=0,
+        content="保险等待期条款",
+        header_path="",
+        start_offset=0,
+        end_offset=len("保险等待期条款"),
+        embedding=_vec(0),
+        context_prefix="本段介绍等待期在保险合同中的定位与作用。",
+    )
+    await kb_store.upsert_chunks(doc, [chunk])
+    hits = await kb_store.search(_vec(0), k=1)
+    assert len(hits) == 1
+    assert hits[0].chunk.context_prefix == "本段介绍等待期在保险合同中的定位与作用。"
+
+
+async def test_upsert_empty_context_prefix_roundtrip(kb_store):
+    """context_prefix='' 写入回读仍为 ''。"""
+    doc = _doc("no-prefix-doc")
+    chunk = Chunk(
+        id=uuid.uuid4(),
+        document_id=doc.id,
+        seq=0,
+        content="无前缀内容",
+        header_path="",
+        start_offset=0,
+        end_offset=len("无前缀内容"),
+        embedding=_vec(1),
+        context_prefix="",
+    )
+    await kb_store.upsert_chunks(doc, [chunk])
+    hits = await kb_store.search(_vec(1), k=1)
+    assert len(hits) == 1
+    assert hits[0].chunk.context_prefix == ""

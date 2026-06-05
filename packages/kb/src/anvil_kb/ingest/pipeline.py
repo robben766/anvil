@@ -19,6 +19,7 @@ async def ingest_markdown(
     size: int = 600,
     overlap: int = 100,
     sparse_index: SparseIndex | None = None,
+    enrich_chat=None,
 ) -> tuple[Document, int]:
     """Chunk, embed (single batch call), and store a markdown document.
 
@@ -34,6 +35,11 @@ async def ingest_markdown(
                       ``sparse_index.index_chunks(chunks)`` is called *after*
                       ``store.upsert_chunks`` so that any cascaded deletion of
                       old postings (triggered by the upsert) happens first.
+        enrich_chat:  Optional chat function for Contextual Retrieval enrichment.
+                      When non-None, ``enrich_chunks`` is called to generate a
+                      context_prefix for each chunk; the prefix is prepended to
+                      the embedding input (prefix + "\\n" + content).  None means
+                      no enrichment (zero behaviour change, prefix stays "").
 
     Returns:
         (Document, chunk_count). Raises ValueError if text produces no chunks.
@@ -45,8 +51,23 @@ async def ingest_markdown(
     if not drafts:
         raise ValueError("document produced no chunks")
 
-    # Single batch embed call — never per-chunk
-    vectors = embedder.embed_texts([d.content for d in drafts])
+    # ── Optional: Contextual Retrieval enrichment ────────────────────────────
+    # Must happen BEFORE embedding so that prefixed text is used for vectors.
+    contexts: list[str] = [""] * len(drafts)
+    if enrich_chat is not None:
+        from anvil_kb.ingest.enrich import enrich_chunks  # noqa: PLC0415
+
+        contexts = await enrich_chunks(
+            doc_text=text, drafts=drafts, chat=enrich_chat
+        )
+
+    # ── Single batch embed call — never per-chunk ────────────────────────────
+    # Embedding input: prefix + "\n" + content when prefix present, else content.
+    embed_inputs = [
+        (contexts[i] + "\n" + d.content if contexts[i] else d.content)
+        for i, d in enumerate(drafts)
+    ]
+    vectors = embedder.embed_texts(embed_inputs)
 
     doc = Document(
         id=uuid.uuid4(),
@@ -65,6 +86,7 @@ async def ingest_markdown(
             start_offset=draft.start_offset,
             end_offset=draft.end_offset,
             embedding=vectors[i],
+            context_prefix=contexts[i],
         )
         for i, draft in enumerate(drafts)
     ]
