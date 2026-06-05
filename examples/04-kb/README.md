@@ -144,3 +144,43 @@ Retriever k=5；judge 走网关 deepseek-chat；faithfulness + answer_relevancy�
 ### 截图：调试视图（三列 + 贡献标注）
 
 ![debug view](screenshots/05-debug-view.png)
+
+---
+
+## 重排对比实验（KB-M3）：精度换时间
+
+在 hybrid 基础上加入 `--rerank`（bge-reranker-base Cross-Encoder），对同一 golden 集（14 个 answerable 例，k=5）完整跑分。
+
+### 两组汇总
+
+| mode             | recall@5 | precision@5 | MRR    | mean latency/query |
+|------------------|----------|-------------|--------|--------------------|
+| hybrid           | 1.000    | 0.200       | 0.881  | 131.3 ms           |
+| hybrid + rerank  | 1.000    | 0.200       | 0.929  | 3128.8 ms          |
+
+recall@5 两组均满分，不提高召回率（召回上限已由 hybrid 达到）；rerank 提升了排序精度：MRR 从 0.881 → 0.929（+5.4 个百分点）。延迟代价为 3128.8 ms vs 131.3 ms，每次查询多花约 **3000 ms**（约 23.8×），主要是 Cross-Encoder 对 5 个候选逐对前向的推理时间（首次运行还有模型加载，此处已加载完毕后测量）。
+
+### 对抗用例 kb-13..16 MRR 对比（hybrid vs hybrid+rerank）
+
+| case  | 类型              | hybrid MRR | hybrid+rerank MRR | 变化   |
+|-------|-------------------|------------|-------------------|--------|
+| kb-13 | 词面精确          | 1.000      | 1.000             | =      |
+| kb-14 | 词面精确          | 1.000      | 1.000             | =      |
+| kb-15 | 换述（语义重写）  | 1.000      | 1.000             | =      |
+| kb-16 | 换述（语义重写）  | 0.333      | 0.500             | +0.167 |
+
+- **kb-16 被 rerank 部分修复**：hybrid RRF 融合把犹豫期条款排在 #3（MRR=0.333），Cross-Encoder 将其提升至 #2（MRR=0.500），但仍未到 #1——得分最高的是产品说明中同提"犹豫期"的摘要性 chunk（Cross-Encoder score 1.3440 vs 犹豫期条款 -0.2199），两条都相关，属于合理的语义混淆而非错误。
+- **kb-13..15 均已满分，rerank 不降分也不提分**：这些用例 hybrid 已将正确 chunk 排在 #1，Cross-Encoder 维持结果。
+- **rerank 对全集的提升来自其他用例**：kb-07 hybrid MRR=0.500 → rerank MRR=1.000（由 #2 提至 #1）是 MRR 均值提升的主要贡献来源。
+
+### 解读
+
+- **rerank 值得用在精度敏感、延迟不敏感的场景**：+5.4% MRR 提升以换取约 3 秒/查询的延迟开销，适合离线批处理、低 QPS 精读类应用；不适合实时对话。
+- **kb-16 提升有限（0.333 → 0.500）而非完全修复**：问题根源是该问法（"刚买几天，钱能退吗"）与语料中直接描述犹豫期的最精准 chunk 之间的语义距离，超出了 Cross-Encoder 可以修正的范围——embedding 初步召回的候选集中已不含最优 chunk 排第一的信号。这是语料覆盖与问法多样性的边界，不是 reranker 的 bug。
+- **recall@5=1.000 两组均满分**：reranker 不影响召回覆盖，仅做重排，所有正确 chunk 在 top-5 候选中均已存在。
+
+### 截图：四列调试视图（Cross-Encoder 重排列可见）
+
+kb-16 原题"不想要这份保险了,刚买几天,钱能退吗?"，调试视图展示 dense / BM25 / RRF 融合 / Cross-Encoder 重排四列，可见 Cross-Encoder 将犹豫期相关 chunk 提至前两位。
+
+![rerank debug view](screenshots/06-rerank-debug.png)
