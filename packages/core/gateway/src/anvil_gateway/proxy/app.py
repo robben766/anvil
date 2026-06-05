@@ -6,12 +6,13 @@
 
 from __future__ import annotations
 
+import json
 import os
 import time
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from anvil_gateway import chat
 from anvil_gateway.errors import (
@@ -59,8 +60,44 @@ def _to_openai(resp: ChatResponse) -> dict[str, Any]:
     }
 
 
-async def _stream_response(body: dict[str, Any], kwargs: dict[str, Any]) -> None:
-    raise HTTPException(status_code=501, detail="stream: task 2")
+async def _stream_response(body: dict[str, Any], kwargs: dict[str, Any]) -> StreamingResponse:
+    async def gen():
+        chunks = await chat(body["model"], body["messages"], stream=True, **kwargs)
+        async for c in chunks:
+            if c.delta or c.finish_reason is not None:
+                payload: dict[str, Any] = {
+                    "id": "anvil-proxy-stream",
+                    "object": "chat.completion.chunk",
+                    "created": int(time.time()),
+                    "model": body["model"],
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": ({"content": c.delta} if c.delta else {}),
+                            "finish_reason": c.finish_reason,
+                        }
+                    ],
+                }
+                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+            if c.usage is not None:
+                u = c.usage
+                usage_payload: dict[str, Any] = {
+                    "id": "anvil-proxy-stream",
+                    "object": "chat.completion.chunk",
+                    "created": int(time.time()),
+                    "model": body["model"],
+                    "choices": [],
+                    "usage": {
+                        "prompt_tokens": u.prompt_tokens,
+                        "completion_tokens": u.completion_tokens,
+                        "total_tokens": u.prompt_tokens + u.completion_tokens,
+                        "prompt_tokens_details": {"cached_tokens": u.cached_tokens},
+                    },
+                }
+                yield f"data: {json.dumps(usage_payload, ensure_ascii=False)}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
 
 
 @app.post("/v1/chat/completions")

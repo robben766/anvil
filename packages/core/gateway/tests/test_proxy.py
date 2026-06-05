@@ -82,3 +82,39 @@ async def test_auth_required_when_key_set(env, monkeypatch):
             "/v1/chat/completions", json=BODY, headers={"Authorization": "Bearer wrong"}
         )
         assert r2.status_code == 401
+
+
+SSE_UPSTREAM = (
+    'data: {"id":"c1","model":"deepseek-chat","choices":[{"index":0,"delta":{"content":"你"},"finish_reason":null}]}\n\n'  # noqa: E501
+    'data: {"id":"c1","model":"deepseek-chat","choices":[{"index":0,"delta":{"content":"好"},"finish_reason":null}]}\n\n'  # noqa: E501
+    'data: {"id":"c1","model":"deepseek-chat","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n'  # noqa: E501
+    'data: {"id":"c1","model":"deepseek-chat","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2,"prompt_cache_hit_tokens":8}}\n\n'  # noqa: E501
+    "data: [DONE]\n\n"
+)
+
+
+@respx.mock
+async def test_stream_proxies_sse(env):
+    respx.post(DS_URL).mock(
+        return_value=httpx.Response(
+            200, text=SSE_UPSTREAM, headers={"content-type": "text/event-stream"}
+        )
+    )
+    async with _client() as c:
+        async with c.stream(
+            "POST", "/v1/chat/completions", json={**BODY, "stream": True}
+        ) as r:
+            assert r.status_code == 200
+            assert r.headers["content-type"].startswith("text/event-stream")
+            raw = "".join([chunk async for chunk in r.aiter_text()])
+    lines = [ln for ln in raw.split("\n\n") if ln.startswith("data: ")]
+    assert lines[-1] == "data: [DONE]"
+    import json as _json
+
+    payloads = [_json.loads(ln[6:]) for ln in lines[:-1]]
+    text = "".join(
+        (p["choices"][0]["delta"].get("content") or "") for p in payloads if p["choices"]
+    )
+    assert text == "你好"
+    finals = [p for p in payloads if p.get("usage")]
+    assert finals and finals[0]["usage"]["prompt_tokens_details"]["cached_tokens"] == 8
