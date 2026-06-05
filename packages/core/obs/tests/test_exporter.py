@@ -48,9 +48,29 @@ async def test_export_failure_never_raises(caplog):
 
 def test_enqueue_without_exporter_is_noop():
     """enqueue when no active exporter must never raise."""
-    from anvil_obs import exporter as exp_mod
-
-    # Ensure no active exporter
-    exp_mod._active = None
     with span("noop"):
         pass  # enqueue is called internally; must not raise
+
+
+@respx.mock
+async def test_aclose_swallows_cancelled_error():
+    """aclose() must not propagate CancelledError even if flush is cancelled mid-flight."""
+    import asyncio
+
+    import anvil_obs.exporter as exp_mod
+
+    # Use a real async side_effect that raises CancelledError to simulate
+    # the task being cancelled while flush's HTTP call is in progress.
+    async def slow_then_cancel(request):
+        raise asyncio.CancelledError()
+
+    respx.post(OTLP).mock(side_effect=slow_then_cancel)
+    exp = OtlpExporter(endpoint=OTLP, public_key="pk", secret_key="sk", flush_interval=9999)
+    with span("x"):
+        pass
+
+    # aclose() must not raise even though flush() will encounter a CancelledError
+    await exp.aclose()  # 不抛即通过
+
+    # _active must be cleared regardless
+    assert exp_mod._active is None

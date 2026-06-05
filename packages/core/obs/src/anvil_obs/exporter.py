@@ -108,7 +108,14 @@ def _build_request(batch: list[Span]) -> bytes:
 
 
 class OtlpExporter:
-    """Batching OTLP/protobuf exporter with background flush and fail-open semantics."""
+    """Batching OTLP/protobuf exporter with background flush and fail-open semantics.
+
+    Module-level singleton: constructing a new instance makes it the active exporter —
+    any subsequently completed spans are routed to it.  The previously active instance
+    (if any) is displaced but **not** closed; callers that hold a reference to the old
+    instance must still call ``await old_instance.aclose()`` to stop its background
+    flush task.
+    """
 
     def __init__(
         self,
@@ -182,18 +189,22 @@ class OtlpExporter:
         """Final flush, cancel background task, and deactivate."""
         global _active
 
-        # Cancel background task first
-        if self._bg_task is not None and not self._bg_task.done():
-            self._bg_task.cancel()
+        try:
+            # Cancel background task first
+            if self._bg_task is not None and not self._bg_task.done():
+                self._bg_task.cancel()
+                try:
+                    await self._bg_task
+                except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                    pass
+                self._bg_task = None
+
+            # Final flush — CancelledError is absorbed so aclose() never propagates it
             try:
-                await self._bg_task
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                await self.flush()
+            except asyncio.CancelledError:
                 pass
-            self._bg_task = None
-
-        # Final flush
-        await self.flush()
-
-        # Deactivate
-        if _active is self:
-            _active = None
+        finally:
+            # Deactivate regardless of cancellation
+            if _active is self:
+                _active = None
