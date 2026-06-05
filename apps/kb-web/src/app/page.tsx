@@ -1,6 +1,14 @@
+"use client";
+
+import { useState } from "react";
 import DocumentPanel from "@/components/DocumentPanel";
+import ChatPanel from "@/components/ChatPanel";
+import CitationPanel from "@/components/CitationPanel";
+import type { Citation } from "@/lib/types";
 
 export default function Home() {
+  const [activeCitation, setActiveCitation] = useState<Citation | null>(null);
+
   return (
     <div className="flex h-full flex-col">
       {/* Top bar */}
@@ -10,19 +18,23 @@ export default function Home() {
         </h1>
       </header>
 
-      {/* Main content: left 1/3 panel + right 2/3 placeholder */}
-      <main className="flex flex-1 overflow-hidden">
+      {/* Main content: left 1/3 panel + right 2/3 chat */}
+      <main className="relative flex flex-1 overflow-hidden">
         {/* Left: document panel */}
         <aside className="w-1/3 overflow-y-auto border-r border-slate-200 p-4">
           <DocumentPanel />
         </aside>
 
-        {/* Right: QA placeholder */}
-        <section className="flex w-2/3 items-center justify-center p-6 text-slate-400">
-          <div className="rounded border border-dashed border-slate-300 px-8 py-10 text-center">
-            <p className="text-sm">问答区（KB-M1b Task B4）</p>
-          </div>
+        {/* Right: chat panel */}
+        <section className="flex w-2/3 flex-col overflow-hidden">
+          <ChatPanel onCite={(c) => setActiveCitation(c)} />
         </section>
+
+        {/* Citation overlay panel (fixed, above content) */}
+        <CitationPanel
+          citation={activeCitation}
+          onClose={() => setActiveCitation(null)}
+        />
       </main>
     </div>
   );

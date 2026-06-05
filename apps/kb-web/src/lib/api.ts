@@ -27,7 +27,7 @@ async function handleResponse<T>(res: Response): Promise<T> {
 }
 
 export async function listDocuments(): Promise<DocumentSummary[]> {
-  const res = await fetch(`${BASE}/documents`);
+  const res = await fetch(`${BASE}/v1/kb/documents`);
   return handleResponse<DocumentSummary[]>(res);
 }
 
@@ -36,7 +36,7 @@ export async function uploadDocument(
 ): Promise<{ id: string; title: string; source_name: string; chunk_count: number }> {
   const form = new FormData();
   form.append("file", file);
-  const res = await fetch(`${BASE}/documents`, { method: "POST", body: form });
+  const res = await fetch(`${BASE}/v1/kb/documents`, { method: "POST", body: form });
   return handleResponse<{
     id: string;
     title: string;
@@ -46,7 +46,7 @@ export async function uploadDocument(
 }
 
 export async function deleteDocument(id: string): Promise<void> {
-  const res = await fetch(`${BASE}/documents/${encodeURIComponent(id)}`, {
+  const res = await fetch(`${BASE}/v1/kb/documents/${encodeURIComponent(id)}`, {
     method: "DELETE",
   });
   if (!res.ok) {
@@ -62,6 +62,6 @@ export async function deleteDocument(id: string): Promise<void> {
 }
 
 export async function getDocument(id: string): Promise<DocumentDetail> {
-  const res = await fetch(`${BASE}/documents/${encodeURIComponent(id)}`);
+  const res = await fetch(`${BASE}/v1/kb/documents/${encodeURIComponent(id)}`);
   return handleResponse<DocumentDetail>(res);
 }
