@@ -190,25 +190,26 @@ async def chat(
         api_key = os.environ.get(adapter.api_key_env, "")
         return _stream_one(adapter, api_key, candidate, messages, params, session_id)
     failures: list[Exception] = []
-    for candidate in resolve(model):
-        provider = MODEL_PROVIDER.get(candidate)
-        if provider is None:
-            raise FatalRequestError(f"unknown model: {candidate}")
-        if not _cooldown.available(provider):
-            failures.append(RetryableError(f"{provider} on cooldown"))
-            continue
-        adapter = _ADAPTERS[provider]
-        api_key = os.environ.get(adapter.api_key_env, "")
-        try:
-            return await call_with_retry(
-                lambda a=adapter, k=api_key, m=candidate: _call_one(
-                    a, k, m, messages, params, session_id
-                ),
-                base_delay=_config["retry_base_delay"],
-            )
-        except RetryableError as e:
-            failures.append(e)
-        except FatalAuthError as e:
-            _cooldown.mark(provider)
-            failures.append(e)
-    raise AllProvidersFailedError(f"all candidates failed: {failures!r}")
+    with span(f"gateway.chat {model}") as _root:  # noqa: F841  — root span for fallback tree
+        for candidate in resolve(model):
+            provider = MODEL_PROVIDER.get(candidate)
+            if provider is None:
+                raise FatalRequestError(f"unknown model: {candidate}")
+            if not _cooldown.available(provider):
+                failures.append(RetryableError(f"{provider} on cooldown"))
+                continue
+            adapter = _ADAPTERS[provider]
+            api_key = os.environ.get(adapter.api_key_env, "")
+            try:
+                return await call_with_retry(
+                    lambda a=adapter, k=api_key, m=candidate: _call_one(
+                        a, k, m, messages, params, session_id
+                    ),
+                    base_delay=_config["retry_base_delay"],
+                )
+            except RetryableError as e:
+                failures.append(e)
+            except FatalAuthError as e:
+                _cooldown.mark(provider)
+                failures.append(e)
+        raise AllProvidersFailedError(f"all candidates failed: {failures!r}")
