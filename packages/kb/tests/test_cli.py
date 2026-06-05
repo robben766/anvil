@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from anvil_kb.cli import _build_parser, _run_eval_command
+from anvil_kb.cli import _build_parser, _run_eval_command, _run_ingest_command, _run_query_command
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -264,3 +264,236 @@ class TestRunEvalCommand:
         assert exc.value.code == 1
         # retrieve must not have been called — no answerable case to process
         fake_retriever.retrieve.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_mrr_column_in_output(self, capsys):
+        """eval 输出应含 MRR 列头,每行含 mrr 分,均值行含 mean MRR。"""
+        case1 = self._make_case(id="t1", question="q1", evidences=["evidence one"])
+        sc1 = _make_scored_chunk("evidence one found here")
+
+        fake_retriever = AsyncMock()
+        fake_retriever.retrieve = AsyncMock(return_value=[sc1])
+
+        with pytest.raises(SystemExit):
+            await _run_eval_command(
+                cases=[case1],
+                retriever=fake_retriever,
+                k=5,
+                recall_threshold=0.8,
+            )
+        captured = capsys.readouterr()
+        assert "mrr" in captured.out.lower()
+
+    @pytest.mark.asyncio
+    async def test_mrr_value_for_rank1_hit(self, capsys):
+        """rank-1 命中时 MRR = 1.000,输出中可见。"""
+        case1 = self._make_case(id="t1", question="q1", evidences=["evidence one"])
+        sc1 = _make_scored_chunk("evidence one found here")
+
+        fake_retriever = AsyncMock()
+        fake_retriever.retrieve = AsyncMock(return_value=[sc1])
+
+        with pytest.raises(SystemExit):
+            await _run_eval_command(
+                cases=[case1],
+                retriever=fake_retriever,
+                k=5,
+                recall_threshold=0.8,
+            )
+        captured = capsys.readouterr()
+        # MRR = 1.0 for rank-1 hit; output should contain "1.000"
+        assert "1.000" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# Parser --mode tests
+# ---------------------------------------------------------------------------
+
+
+class TestParserMode:
+    def test_eval_default_mode_is_hybrid(self):
+        parser = _build_parser()
+        args = parser.parse_args(["eval", "--dataset", "d.jsonl", "--corpus", "c/"])
+        assert args.mode == "hybrid"
+
+    def test_eval_mode_dense(self):
+        parser = _build_parser()
+        args = parser.parse_args(
+            ["eval", "--dataset", "d.jsonl", "--corpus", "c/", "--mode", "dense"]
+        )
+        assert args.mode == "dense"
+
+    def test_eval_mode_sparse(self):
+        parser = _build_parser()
+        args = parser.parse_args(
+            ["eval", "--dataset", "d.jsonl", "--corpus", "c/", "--mode", "sparse"]
+        )
+        assert args.mode == "sparse"
+
+    def test_eval_mode_hybrid_explicit(self):
+        parser = _build_parser()
+        args = parser.parse_args(
+            ["eval", "--dataset", "d.jsonl", "--corpus", "c/", "--mode", "hybrid"]
+        )
+        assert args.mode == "hybrid"
+
+
+# ---------------------------------------------------------------------------
+# _run_query_command: hybrid wiring tests
+# ---------------------------------------------------------------------------
+
+
+class TestRunQueryCommand:
+    """Smoke-test _run_query_command: verify hybrid Retriever is wired correctly.
+
+    cli.py uses local imports inside the async functions, so we patch at the
+    source module level (e.g. 'anvil_kb.store.pg.PgVectorStore') rather than
+    at 'anvil_kb.cli.PgVectorStore' which is never bound as a module attribute.
+    """
+
+    @pytest.mark.asyncio
+    async def test_query_command_uses_hybrid_retriever(self, capsys):
+        """_run_query_command constructs Retriever with sparse_index + mode='hybrid'."""
+        fake_embedder = MagicMock()
+        fake_session_factory = MagicMock()
+
+        fake_store = MagicMock()
+        fake_bm25 = MagicMock()
+
+        scored_chunk = _make_scored_chunk("some relevant content")
+        fake_retriever = AsyncMock()
+        fake_retriever.retrieve = AsyncMock(return_value=[scored_chunk])
+
+        fake_answer = MagicMock()
+        fake_answer.text = "42 天"
+        fake_answer.citations = []
+
+        with (
+            patch("anvil_kb.store.pg.PgVectorStore", return_value=fake_store) as mock_vs,
+            patch("anvil_kb.store.bm25.PgBM25Index", return_value=fake_bm25) as mock_bm25,
+            patch(
+                "anvil_kb.retrieve.retriever.Retriever", return_value=fake_retriever
+            ) as mock_retriever_cls,
+            patch("anvil_kb.generate.answer", new=AsyncMock(return_value=fake_answer)),
+        ):
+            await _run_query_command("等待期是多少天?", 3, fake_embedder, fake_session_factory)
+
+        # PgVectorStore and PgBM25Index each constructed with session_factory
+        mock_vs.assert_called_once_with(fake_session_factory)
+        mock_bm25.assert_called_once_with(fake_session_factory)
+
+        # Retriever must be constructed with sparse_index=bm25 and mode="hybrid"
+        mock_retriever_cls.assert_called_once_with(
+            fake_embedder, fake_store, sparse_index=fake_bm25, mode="hybrid"
+        )
+
+        # retrieve was called with the question and k
+        fake_retriever.retrieve.assert_called_once_with("等待期是多少天?", k=3)
+
+        # Answer printed to stdout
+        captured = capsys.readouterr()
+        assert "42 天" in captured.out
+
+    @pytest.mark.asyncio
+    async def test_query_command_does_not_raise_without_sparse_index_arg(self):
+        """_run_query_command does NOT raise ValueError (hybrid wiring is present).
+
+        Previously Retriever(embedder, store) with default mode='hybrid' would
+        raise ValueError because sparse_index was None.  After the fix, the CLI
+        constructs PgBM25Index and passes it explicitly.
+        """
+        fake_embedder = MagicMock()
+        fake_session_factory = MagicMock()
+
+        fake_store = MagicMock()
+        fake_bm25 = MagicMock()
+
+        scored_chunk = _make_scored_chunk("some content")
+        fake_retriever = AsyncMock()
+        fake_retriever.retrieve = AsyncMock(return_value=[scored_chunk])
+
+        fake_answer = MagicMock()
+        fake_answer.text = "ok"
+        fake_answer.citations = []
+
+        with (
+            patch("anvil_kb.store.pg.PgVectorStore", return_value=fake_store),
+            patch("anvil_kb.store.bm25.PgBM25Index", return_value=fake_bm25),
+            patch("anvil_kb.retrieve.retriever.Retriever", return_value=fake_retriever),
+            patch("anvil_kb.generate.answer", new=AsyncMock(return_value=fake_answer)),
+        ):
+            # Must not raise — previously raised ValueError("mode='hybrid' requires sparse_index")
+            await _run_query_command("test question", 5, fake_embedder, fake_session_factory)
+
+
+# ---------------------------------------------------------------------------
+# _run_ingest_command: hybrid dual-write wiring tests
+# ---------------------------------------------------------------------------
+
+
+class TestRunIngestCommand:
+    """Smoke-test _run_ingest_command: verify sparse_index is passed to ingest_markdown."""
+
+    @pytest.mark.asyncio
+    async def test_ingest_command_passes_sparse_index(self, tmp_path):
+        """_run_ingest_command calls ingest_markdown with sparse_index=bm25."""
+        md_file = tmp_path / "test_doc.md"
+        md_file.write_text("# Test\n\nSome content here.", encoding="utf-8")
+
+        fake_embedder = MagicMock()
+        fake_session_factory = MagicMock()
+        fake_store = MagicMock()
+        fake_bm25 = MagicMock()
+
+        mock_ingest = AsyncMock(return_value=(MagicMock(), 2))
+
+        with (
+            patch("anvil_kb.store.pg.PgVectorStore", return_value=fake_store),
+            patch("anvil_kb.store.bm25.PgBM25Index", return_value=fake_bm25) as mock_bm25_cls,
+            patch("anvil_kb.ingest.pipeline.ingest_markdown", mock_ingest),
+        ):
+            await _run_ingest_command(
+                [str(md_file)], fake_embedder, fake_session_factory
+            )
+
+        # PgBM25Index constructed with session_factory
+        mock_bm25_cls.assert_called_once_with(fake_session_factory)
+
+        # ingest_markdown must have been called with sparse_index=bm25
+        assert mock_ingest.call_count == 1
+        _, kwargs = mock_ingest.call_args
+        assert kwargs.get("sparse_index") is fake_bm25, (
+            "ingest_markdown must be called with sparse_index=bm25 "
+            f"(got sparse_index={kwargs.get('sparse_index')!r})"
+        )
+
+    @pytest.mark.asyncio
+    async def test_ingest_command_multiple_files_all_get_sparse_index(self, tmp_path):
+        """Each file in a multi-file ingest is dual-written with the same bm25 instance."""
+        files = []
+        for i in range(3):
+            f = tmp_path / f"doc{i}.md"
+            f.write_text(f"# Doc {i}\n\nContent {i}.", encoding="utf-8")
+            files.append(str(f))
+
+        fake_embedder = MagicMock()
+        fake_session_factory = MagicMock()
+        fake_store = MagicMock()
+        fake_bm25 = MagicMock()
+
+        mock_ingest = AsyncMock(return_value=(MagicMock(), 1))
+
+        with (
+            patch("anvil_kb.store.pg.PgVectorStore", return_value=fake_store),
+            patch("anvil_kb.store.bm25.PgBM25Index", return_value=fake_bm25),
+            patch("anvil_kb.ingest.pipeline.ingest_markdown", mock_ingest),
+        ):
+            await _run_ingest_command(files, fake_embedder, fake_session_factory)
+
+        # ingest_markdown called once per file, each time with sparse_index=bm25
+        assert mock_ingest.call_count == 3
+        for i, individual_call in enumerate(mock_ingest.call_args_list):
+            _, kwargs = individual_call
+            assert kwargs.get("sparse_index") is fake_bm25, (
+                f"call {i}: ingest_markdown must receive sparse_index=bm25"
+            )

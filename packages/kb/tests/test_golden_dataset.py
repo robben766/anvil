@@ -25,10 +25,10 @@ def _load_corpus_texts() -> list[str]:
 # ── 基础加载测试 ──────────────────────────────────────────────────────────────
 
 
-def test_load_dataset_succeeds_with_12_cases():
-    """kb.jsonl 能被 load_dataset 加载且恰好有 12 条用例。"""
+def test_load_dataset_succeeds_with_16_cases():
+    """kb.jsonl 能被 load_dataset 加载且恰好有 16 条用例。"""
     cases = load_dataset(str(_GOLDEN_JSONL))
-    assert len(cases) == 12, f"Expected 12 cases, got {len(cases)}"
+    assert len(cases) == 16, f"Expected 16 cases, got {len(cases)}"
 
 
 # ── evidence 子串验证 ─────────────────────────────────────────────────────────
@@ -91,7 +91,7 @@ def normalized_corpus():
 
 @pytest.mark.parametrize(
     "case_id",
-    [f"kb-{i:02d}" for i in range(1, 13)],
+    [f"kb-{i:02d}" for i in range(1, 17)],
 )
 def test_case_exists(case_id, kb_cases):
     """每个预期 id 在数据集中都存在。"""

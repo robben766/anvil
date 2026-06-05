@@ -52,8 +52,8 @@ uv run pytest -m "not live" -q
 | anvil-gateway | M5 | 多 provider 统一调用 / fallback / 缓存计账 |
 | anvil-obs | M3 | 自研 OTEL span + Langfuse 导出 |
 | anvil-eval | M4 | 手写 RAGAS 四指标 + golden CI 门禁 |
-| anvil-kb | KB-M1b | hand-rolled RAG:chunker/pgvector/retriever/generate;CLI ingest/query/eval |
-| kb-web | KB-M1b | 知识库问答前端:Next.js 16 + SSE 流式答案 |
+| anvil-kb | KB-M2 | hand-rolled RAG:chunker/pgvector/BM25/RRF 混合检索;CLI ingest/query/eval --mode dense\|sparse\|hybrid |
+| kb-web | KB-M2 | 知识库问答前端:Next.js 16 + SSE 流式答案 + 调试视图（三列 RRF 贡献标注） |
 
 ## 进度
 

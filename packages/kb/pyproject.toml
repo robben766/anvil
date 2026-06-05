@@ -10,6 +10,7 @@ dependencies = [
     "alembic>=1.13",
     "pgvector>=0.3",
     "fastembed>=0.3",
+    "jieba>=0.42",
 ]
 
 [tool.uv.sources]

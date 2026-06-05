@@ -51,9 +51,11 @@ def _make_components():
 
 async def _run_ingest_command(files: list[str], embedder, session_factory) -> None:
     from anvil_kb.ingest.pipeline import ingest_markdown
+    from anvil_kb.store.bm25 import PgBM25Index
     from anvil_kb.store.pg import PgVectorStore
 
     store = PgVectorStore(session_factory)
+    bm25 = PgBM25Index(session_factory)
     cwd = Path.cwd()
     for file_str in files:
         path = Path(file_str)
@@ -69,6 +71,7 @@ async def _run_ingest_command(files: list[str], embedder, session_factory) -> No
             text=text,
             embedder=embedder,
             store=store,
+            sparse_index=bm25,
         )
         print(f"ingested: {source_name!r}  title={title!r}  chunks={n_chunks}")
 
@@ -76,10 +79,12 @@ async def _run_ingest_command(files: list[str], embedder, session_factory) -> No
 async def _run_query_command(question: str, k: int, embedder, session_factory) -> None:
     from anvil_kb.generate import answer
     from anvil_kb.retrieve.retriever import Retriever
+    from anvil_kb.store.bm25 import PgBM25Index
     from anvil_kb.store.pg import PgVectorStore
 
     store = PgVectorStore(session_factory)
-    retriever = Retriever(embedder, store)
+    bm25 = PgBM25Index(session_factory)
+    retriever = Retriever(embedder, store, sparse_index=bm25, mode="hybrid")
     retrieved = await retriever.retrieve(question, k=k)
     kb_answer = await answer(question, retrieved)
     print(kb_answer.text)
@@ -100,13 +105,14 @@ async def _run_eval_command(
 
     Exits the process with code 0 (pass) or 1 (fail).
     """
-    from anvil_eval.metrics.retrieval import precision_at_k, recall_at_k
+    from anvil_eval.metrics.retrieval import mrr, precision_at_k, recall_at_k
 
     recall_scores: list[float] = []
     precision_scores: list[float] = []
+    mrr_scores: list[float] = []
 
-    print(f"{'id':<12} {'recall@k':>10} {'precision@k':>12}")
-    print("-" * 38)
+    print(f"{'id':<12} {'recall@k':>10} {'precision@k':>12} {'mrr':>8}")
+    print("-" * 48)
 
     for case in cases:
         if not case.answerable:
@@ -118,19 +124,27 @@ async def _run_eval_command(
 
         r = recall_at_k(texts, case.evidences, k)
         p = precision_at_k(texts, case.evidences, k)
+        m = mrr(texts, case.evidences)
 
         r_val = r if r is not None else 0.0
         p_val = p if p is not None else 0.0
+        m_val = m if m is not None else 0.0
         recall_scores.append(r_val)
         precision_scores.append(p_val)
-        print(f"{case.id:<12} {r_val:>10.3f} {p_val:>12.3f}")
+        mrr_scores.append(m_val)
+        print(f"{case.id:<12} {r_val:>10.3f} {p_val:>12.3f} {m_val:>8.3f}")
 
-    print("-" * 38)
+    print("-" * 48)
     mean_recall = sum(recall_scores) / len(recall_scores) if recall_scores else 0.0
     mean_precision = sum(precision_scores) / len(precision_scores) if precision_scores else 0.0
-    print(f"{'mean':<12} {mean_recall:>10.3f} {mean_precision:>12.3f}")
+    mean_mrr = sum(mrr_scores) / len(mrr_scores) if mrr_scores else 0.0
+    print(f"{'mean':<12} {mean_recall:>10.3f} {mean_precision:>12.3f} {mean_mrr:>8.3f}")
     print()
-    print(f"mean recall@{k} = {mean_recall:.4f}  threshold = {recall_threshold}")
+    print(
+        f"mean recall@{k} = {mean_recall:.4f}"
+        f"  threshold = {recall_threshold}"
+        f"  mean MRR = {mean_mrr:.4f}"
+    )
 
     if mean_recall >= recall_threshold:
         print("PASS")
@@ -147,22 +161,28 @@ async def _run_eval_with_ingest(
     recall_threshold: float,
     embedder,
     session_factory,
+    mode: str = "hybrid",
 ) -> None:
     """Ingest corpus then run eval loop."""
     from anvil_eval.dataset import load_dataset
 
     from anvil_kb.ingest.pipeline import ingest_markdown
     from anvil_kb.retrieve.retriever import Retriever
+    from anvil_kb.store.bm25 import PgBM25Index
     from anvil_kb.store.pg import PgVectorStore
 
     # Ingest corpus
     store = PgVectorStore(session_factory)
+    sparse_index: PgBM25Index | None = None
+    if mode in ("sparse", "hybrid"):
+        sparse_index = PgBM25Index(session_factory)
+
     corpus = Path(corpus_dir)
     md_files = sorted(corpus.glob("*.md"))
     if not md_files:
         print(f"WARNING: no .md files found in {corpus_dir}", file=sys.stderr)
 
-    print(f"Ingesting {len(md_files)} file(s) from {corpus_dir!r} ...")
+    print(f"Ingesting {len(md_files)} file(s) from {corpus_dir!r} (mode={mode!r}) ...")
     for md_path in md_files:
         source_name = md_path.name
         title = md_path.stem
@@ -173,15 +193,16 @@ async def _run_eval_with_ingest(
             text=text,
             embedder=embedder,
             store=store,
+            sparse_index=sparse_index,
         )
         print(f"  {source_name}  ({n_chunks} chunks)")
 
     # Build retriever
-    retriever = Retriever(embedder, store)
+    retriever = Retriever(embedder, store, sparse_index=sparse_index, mode=mode)
 
     # Load golden cases
     cases = load_dataset(dataset_path)
-    print(f"\nEvaluating {len(cases)} case(s) (k={k}) ...")
+    print(f"\nEvaluating {len(cases)} case(s) (k={k}, mode={mode!r}) ...")
     print()
 
     await _run_eval_command(cases, retriever, k, recall_threshold)
@@ -222,6 +243,12 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="recall_threshold",
         help="Mean recall@k gate threshold (default: 0.8)",
     )
+    eval_p.add_argument(
+        "--mode",
+        choices=["dense", "sparse", "hybrid"],
+        default="hybrid",
+        help="Retrieval mode: dense | sparse | hybrid (default: hybrid)",
+    )
 
     return parser
 
@@ -259,6 +286,7 @@ def main() -> None:
                 recall_threshold=args.recall_threshold,
                 embedder=embedder,
                 session_factory=session_factory,
+                mode=args.mode,
             )
         )
 

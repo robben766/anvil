@@ -22,7 +22,7 @@ hand-rolled RAG pipeline:chunker / fastembed / PgVectorStore(pgvector) / Retriev
 - CLI 三命令(需 `ANVIL_DATABASE_URL` 环境变量):
   - `anvil-kb ingest <file.md ...>` — 写入 KB
   - `anvil-kb query "<question>" [--k 5]` — 检索+生成(需 API key)
-  - `anvil-kb eval --dataset kb.jsonl --corpus corpus/ [--k 5] [--recall-threshold 0.8]` — 纯检索评测,不调 LLM;exit 0=达标
+  - `anvil-kb eval --dataset kb.jsonl --corpus corpus/ [--k 5] [--recall-threshold 0.8] [--mode dense|sparse|hybrid]` — 纯检索评测,不调 LLM;exit 0=达标;hybrid 模式启用 pgvector + BM25 RRF 融合,是默认值
 
 ## apps/
 

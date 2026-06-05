@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import uuid
 from datetime import datetime
 from typing import Any
@@ -32,9 +33,13 @@ from anvil_kb.generate import answer, answer_stream
 from anvil_kb.ingest.pipeline import ingest_markdown
 from anvil_kb.retrieve.retriever import Retriever
 from anvil_kb.store.base import ScoredChunk
+from anvil_kb.store.bm25 import PgBM25Index
 from anvil_kb.store.pg import PgVectorStore
 
 _ALLOWED_EXTENSIONS = {".md", ".txt"}
+
+# H4: maximum upload size (2 MB)
+MAX_UPLOAD_BYTES = 2 * 1024 * 1024
 
 
 # ---------------------------------------------------------------------------
@@ -63,6 +68,7 @@ class QueryRequest(BaseModel):
     question: str
     k: int = Field(5, ge=1, le=20)
     stream: bool = True
+    debug: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -107,12 +113,62 @@ def _sources_list(retrieved: list[ScoredChunk]) -> list[dict]:
     return items
 
 
+def _debug_list(scored_chunks: list[ScoredChunk], *, include_contributions: bool = False,
+                contributions: dict | None = None) -> list[dict]:
+    """Build a debug sub-list (dense, sparse, or fused).
+
+    Args:
+        scored_chunks:         List of ScoredChunk items.
+        include_contributions: If True, add 'contributions' key per item (fused only).
+        contributions:         The full contributions map from RetrievalDebug.
+
+    Note on ``rank``:
+        rank = 本列表内位置(1..k)；fused 项的 contributions 是 k*4 候选池内排位,
+        可能 > k（例如 dense:7 表示该 chunk 在稠密候选池中排第 7，超出最终返回的 k）。
+        contributions 的值原样透传，不裁剪。
+    """
+    items = []
+    for i, sc in enumerate(scored_chunks):
+        item: dict[str, Any] = {
+            "n": i + 1,
+            "chunk_id": str(sc.chunk.id),
+            "quote_head": sc.chunk.content[:40],
+            "score": round(sc.score, 4),
+            "rank": i + 1,
+        }
+        if include_contributions and contributions is not None:
+            chunk_contrib = contributions.get(str(sc.chunk.id), {"dense": None, "sparse": None})
+            item["contributions"] = chunk_contrib
+        items.append(item)
+    return items
+
+
+def _build_debug_payload(debug_result) -> dict:
+    """Convert a RetrievalDebug into the SSE debug frame payload."""
+    return {
+        "dense": _debug_list(debug_result.dense),
+        "sparse": _debug_list(debug_result.sparse),
+        "fused": _debug_list(
+            debug_result.fused,
+            include_contributions=True,
+            contributions=debug_result.contributions,
+        ),
+    }
+
+
 def _check_auth(authorization: str | None) -> None:
-    """Mirror proxy/app.py auth check: ANVIL_KB_API_KEY controls requirement."""
+    """Mirror proxy/app.py auth check: ANVIL_KB_API_KEY controls requirement.
+
+    Uses secrets.compare_digest to prevent timing attacks.
+    Both sides are encoded to bytes to avoid TypeError on non-ASCII input.
+    """
     expected = os.environ.get("ANVIL_KB_API_KEY")
     if not expected:
         return
-    if authorization != f"Bearer {expected}":
+    expected_header = f"Bearer {expected}"
+    provided = authorization or ""
+    # encode both to bytes — secrets.compare_digest requires both to be the same type
+    if not secrets.compare_digest(provided.encode(), expected_header.encode()):
         raise HTTPException(status_code=401, detail="invalid api key")
 
 
@@ -127,7 +183,7 @@ def create_app(
 
     session_factory=None → lazy-build from ANVIL_DATABASE_URL env var.
     embedder=None        → FastEmbedEmbedder() (lazy local model).
-    retriever=None       → Retriever(embedder, store) (default dense retriever).
+    retriever=None       → Retriever(embedder, store, sparse_index, mode='hybrid').
     chat=None            → anvil_gateway.chat (default LLM backend).
     """
     # Resolve dependencies
@@ -140,13 +196,30 @@ def create_app(
 
     store = PgVectorStore(session_factory)
 
-    # retriever can be injected for tests; defaults to Retriever(embedder, store)
-    _retriever = retriever if retriever is not None else Retriever(embedder, store)
+    # H4: build hybrid retriever with PgBM25Index when retriever is not injected
+    if retriever is None:
+        sparse_index = PgBM25Index(session_factory)
+        _retriever = Retriever(embedder, store, sparse_index=sparse_index, mode="hybrid")
+    else:
+        # Injected retriever (tests); also keep sparse_index reference for ingest dual-write
+        _retriever = retriever
+        sparse_index = None  # no dual-write when test retriever is injected
+
+    # H4: parse CORS origins from environment
+    # 空串/纯空格的 env 值视为未配置，fallback 到 ["*"]，避免 CORSMiddleware 收到空列表
+    cors_origins_env = os.environ.get("ANVIL_KB_CORS_ORIGINS", "*")
+    if cors_origins_env == "*":
+        cors_origins: list[str] = ["*"]
+    else:
+        cors_origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
+        if not cors_origins:
+            # empty string or whitespace-only env → treat as unconfigured → wildcard
+            cors_origins = ["*"]
 
     app = FastAPI(title="anvil-kb-api", version="0.1.0")
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=cors_origins,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -173,6 +246,17 @@ def create_app(
             )
 
         raw = await file.read()
+
+        # H4: enforce upload size limit
+        if len(raw) > MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"file too large: {len(raw)} bytes exceeds"
+                    f" limit of {MAX_UPLOAD_BYTES} bytes"
+                ),
+            )
+
         try:
             text = raw.decode("utf-8")
         except UnicodeDecodeError as exc:
@@ -190,6 +274,7 @@ def create_app(
                 text=text,
                 embedder=embedder,
                 store=store,
+                sparse_index=sparse_index,  # H4: dual-write to BM25 index
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -313,32 +398,55 @@ def create_app(
         if not req.question or not req.question.strip():
             raise HTTPException(status_code=400, detail="question must not be empty")
 
+        # H4: non-stream + debug is not supported
+        if not req.stream and req.debug:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "debug=true is only supported with stream=true;"
+                    " use stream=true to get debug frames"
+                ),
+            )
+
         if req.stream:
             # --- SSE streaming path ---
-            # We need retrieved for citation serialisation in done event,
-            # so we collect it upfront and drive the stream manually.
             async def _sse_generator():
-                retrieved = await _retriever.retrieve(req.question, req.k)
-                async for event_type, payload in answer_stream(
-                    req.question,
-                    retrieved,
-                    chat=chat,
-                ):
-                    if event_type == "sources":
-                        # payload is the retrieved list yielded by answer_stream
-                        yield _sse_event("sources", _sources_list(payload))
-                    elif event_type == "delta":
-                        yield _sse_event("delta", {"text": payload})
-                    elif event_type == "done":
-                        kb_answer = payload
-                        done_payload = {
-                            "text": kb_answer.text,
-                            "citations": [
-                                _citation_to_dict(c, retrieved)
-                                for c in kb_answer.citations
-                            ],
-                        }
-                        yield _sse_event("done", done_payload)
+                try:
+                    if req.debug:
+                        # H4: debug path — retrieve_debug then use fused as retrieved
+                        debug_result = await _retriever.retrieve_debug(req.question, req.k)
+                        retrieved = debug_result.fused
+                        # Emit debug frame BEFORE sources
+                        yield _sse_event("debug", _build_debug_payload(debug_result))
+                    else:
+                        # Normal path — zero extra overhead
+                        retrieved = await _retriever.retrieve(req.question, req.k)
+
+                    async for event_type, payload in answer_stream(
+                        req.question,
+                        retrieved,
+                        chat=chat,
+                    ):
+                        if event_type == "sources":
+                            # payload is the retrieved list yielded by answer_stream
+                            yield _sse_event("sources", _sources_list(payload))
+                        elif event_type == "delta":
+                            yield _sse_event("delta", {"text": payload})
+                        elif event_type == "done":
+                            kb_answer = payload
+                            done_payload = {
+                                "text": kb_answer.text,
+                                "citations": [
+                                    _citation_to_dict(c, retrieved)
+                                    for c in kb_answer.citations
+                                ],
+                            }
+                            yield _sse_event("done", done_payload)
+                except Exception as exc:  # noqa: BLE001
+                    # H4: any exception (retrieval or generation) → error SSE frame
+                    detail = str(exc)[:200]
+                    yield _sse_event("error", {"detail": detail})
+                    # Generator returns normally — StreamingResponse ends cleanly
 
             return StreamingResponse(
                 _sse_generator(),
