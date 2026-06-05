@@ -109,6 +109,17 @@ async def test_upload_whitespace_only_returns_400(api_client: httpx.AsyncClient)
     assert "no chunks" in response.json()["detail"].lower()
 
 
+@pytest.mark.asyncio
+async def test_upload_non_utf8_returns_400(api_client: httpx.AsyncClient):
+    """Non-UTF-8 bytes in a .md file should return 400 with 'not valid UTF-8' detail."""
+    response = await api_client.post(
+        "/v1/kb/documents",
+        files={"file": ("bad_encoding.md", b"\xff\xfe\x00 not utf8", "text/plain")},
+    )
+    assert response.status_code == 400
+    assert "not valid utf-8" in response.json()["detail"].lower()
+
+
 # ---------------------------------------------------------------------------
 # Bearer auth
 # ---------------------------------------------------------------------------

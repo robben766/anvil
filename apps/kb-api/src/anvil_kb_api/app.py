@@ -173,7 +173,13 @@ def create_app(
             )
 
         raw = await file.read()
-        text = raw.decode("utf-8")
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"file content is not valid UTF-8: {exc}",
+            ) from exc
 
         stem = filename.rsplit(".", 1)[0] if "." in filename else filename
 

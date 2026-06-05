@@ -501,3 +501,32 @@ async def test_query_k_zero_422(_run_kb_migrations):
         assert r.status_code == 422
 
     await engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Auth: POST /v1/kb/query → 401 when ANVIL_KB_API_KEY set and no header
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_query_auth_no_header_returns_401(
+    _run_kb_migrations, monkeypatch  # noqa: ARG001
+):
+    """With ANVIL_KB_API_KEY set, POST /v1/kb/query without Authorization → 401."""
+    from anvil_kb_api.app import create_app
+
+    monkeypatch.setenv("ANVIL_KB_API_KEY", "secret-key")
+
+    engine = create_async_engine(TEST_DB_URL, poolclass=NullPool)
+    sf = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    app = create_app(session_factory=sf, embedder=FakeEmbedder())
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        r = await client.post(
+            "/v1/kb/query", json={"question": "等待期?", "stream": False}
+        )
+        assert r.status_code == 401
+
+    await engine.dispose()
