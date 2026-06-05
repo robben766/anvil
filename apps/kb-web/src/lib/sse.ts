@@ -1,6 +1,5 @@
 import type { QueryDone, Source } from "./types";
-
-const BASE = process.env.NEXT_PUBLIC_KB_API_URL ?? "http://localhost:8400";
+import { BASE } from "./api";
 
 export interface SseCallbacks {
   onSources(s: Source[]): void;
@@ -86,7 +85,10 @@ export function streamQuery(
         dispatchFrame(buffer.trim(), cb);
       }
     } catch (err) {
-      if ((err as Error).name === "AbortError") return;
+      if ((err as Error).name === "AbortError") {
+        reader.cancel().catch(() => {});
+        return;
+      }
       cb.onError(err instanceof Error ? err : new Error(String(err)));
     } finally {
       reader.releaseLock();

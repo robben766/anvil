@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { getDocument } from "@/lib/api";
 import type { Citation } from "@/lib/types";
 
@@ -21,6 +21,9 @@ interface DocCache {
 export default function CitationPanel({ citation, onClose }: Props) {
   const [cache, setCache] = useState<DocCache | null>(null);
   const highlightRef = useRef<HTMLSpanElement>(null);
+  // Tracks the document_id that is currently loaded or being fetched,
+  // avoiding stale-closure reads of `cache` state inside the effect.
+  const fetchedDocRef = useRef<string | null>(null);
 
   // Fetch document whenever citation's document_id changes
   useEffect(() => {
@@ -28,9 +31,10 @@ export default function CitationPanel({ citation, onClose }: Props) {
 
     const docId = citation.document_id;
 
-    // Only fetch if we don't already have this doc
-    if (cache?.documentId === docId && !cache.loading) return;
+    // Same doc already loaded or in flight — skip
+    if (fetchedDocRef.current === docId) return;
 
+    fetchedDocRef.current = docId;
     let cancelled = false;
     getDocument(docId)
       .then((doc) => {
@@ -46,6 +50,8 @@ export default function CitationPanel({ citation, onClose }: Props) {
       })
       .catch((err: unknown) => {
         if (!cancelled) {
+          // Clear ref so a subsequent click on the same doc can retry
+          fetchedDocRef.current = null;
           setCache({
             documentId: docId,
             loading: false,
@@ -59,11 +65,10 @@ export default function CitationPanel({ citation, onClose }: Props) {
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [citation?.document_id]);
+  }, [citation]);
 
-  // Scroll highlight into view whenever content or citation changes
-  useEffect(() => {
+  // Scroll highlight into view after the DOM has been updated
+  useLayoutEffect(() => {
     if (highlightRef.current) {
       highlightRef.current.scrollIntoView({ block: "center", behavior: "smooth" });
     }

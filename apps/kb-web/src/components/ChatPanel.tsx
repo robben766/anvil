@@ -68,6 +68,7 @@ export default function ChatPanel({ onCite }: Props) {
         );
       },
       onDone(d: QueryDone) {
+        // done.text 是后端保证的完整答案(B2 测试断言 delta 拼接 == done.text),覆盖累计值以消除任何流式拼接误差
         patchTurn({ answer: d.text, citations: d.citations, streaming: false });
         setStreaming(false);
         abortRef.current = null;

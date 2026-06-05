@@ -1,4 +1,4 @@
-const BASE = process.env.NEXT_PUBLIC_KB_API_URL ?? "http://localhost:8400";
+export const BASE = process.env.NEXT_PUBLIC_KB_API_URL ?? "http://localhost:8400";
 
 export interface DocumentSummary {
   id: string;
