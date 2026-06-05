@@ -75,12 +75,20 @@ class Retriever:
         return debug.fused
 
     async def retrieve_debug(self, question: str, k: int = 5) -> RetrievalDebug:
-        """Always runs the full hybrid pipeline and returns a debug view.
+        """Run the full three-path pipeline and return a debug view.
 
-        Even when mode != 'hybrid', the debug view shows all three paths.
-        This is useful for diagnosing retrieval quality regardless of the
-        configured production mode.
+        Unlike ``retrieve()``, which respects the configured mode, this method
+        always executes the hybrid path (dense + sparse + RRF) regardless of
+        ``self._mode``.  Because sparse search is always required, a
+        ``sparse_index`` must have been provided at construction time even when
+        the production mode is ``'dense'``.
+
+        Raises:
+            ValueError: If no ``sparse_index`` was provided (debug always needs
+                        the sparse path to build the full contributions map).
         """
+        if self._sparse_index is None:
+            raise ValueError("retrieve_debug requires a sparse_index")
         return await self._hybrid_debug(question, k)
 
     # ------------------------------------------------------------------
@@ -96,8 +104,18 @@ class Retriever:
 
         Candidate expansion: both dense and sparse use k*4 candidates so the
         RRF pool is larger than the final top-k, giving fusion room to work.
+
+        Called from both ``retrieve()`` (hybrid mode, guarded by __init__) and
+        ``retrieve_debug()`` (any mode, guarded by its own ValueError check), so
+        ``self._sparse_index`` is always non-None here.
+
+        The contributions map is built over the full k*4 candidate lists, so
+        ranks in contributions are 1-based positions within those lists and may
+        be larger than k.  This is an intentional single-pass trade-off:
+        contributions are always constructed (O(k*4)) even in non-debug callers.
         """
-        assert self._sparse_index is not None  # guaranteed by mode check in __init__
+        # _sparse_index is guaranteed non-None by the callers' guards above
+        assert self._sparse_index is not None
 
         candidates = k * 4
 
@@ -111,6 +129,7 @@ class Retriever:
 
         # ── 3. Build contributions map ───────────────────────────────────────
         # contributions[chunk_id_str] = {'dense': rank | None, 'sparse': rank | None}
+        # Ranks are 1-based positions within the k*4 candidate lists (may be > k)
         dense_ranks: dict[str, int] = {
             str(sc.chunk.id): pos + 1
             for pos, sc in enumerate(dense_candidates)

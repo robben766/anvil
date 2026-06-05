@@ -254,6 +254,19 @@ def test_dense_mode_without_sparse_index_is_ok():
     assert retriever is not None
 
 
+@pytest.mark.asyncio
+async def test_retrieve_debug_without_sparse_raises():
+    """retrieve_debug() must raise ValueError when no sparse_index is available.
+
+    Even a Retriever constructed in 'dense' mode (which normally needs no
+    sparse_index) must raise because retrieve_debug always runs the hybrid
+    path and requires both indexes.
+    """
+    retriever = Retriever(FakeEmbedder(), FakeVectorStore([]), mode="dense")
+    with pytest.raises(ValueError, match="sparse_index"):
+        await retriever.retrieve_debug("any question")
+
+
 # ---------------------------------------------------------------------------
 # retrieve_debug contributions test
 # ---------------------------------------------------------------------------

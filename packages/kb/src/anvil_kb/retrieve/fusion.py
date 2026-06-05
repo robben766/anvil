@@ -40,7 +40,11 @@ class RetrievalDebug:
         sparse:        Top-k results from the sparse (BM25) path.
         fused:         Final top-k results after RRF fusion.
         contributions: For each chunk_id (str), maps "dense" and/or "sparse"
-                       to the 1-based rank in that sub-list (None if absent).
+                       to the 1-based rank within the *k*4 candidate list*
+                       used internally (None if the chunk was absent from that
+                       sub-list).  Because the candidate list has k*4 entries,
+                       ranks may be greater than k — e.g. rank 17 in a k=5
+                       search (k*4 = 20 candidates).
     """
 
     dense: list[ScoredChunk]

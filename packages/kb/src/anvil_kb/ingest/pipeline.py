@@ -76,6 +76,8 @@ async def ingest_markdown(
     # Order matters: upsert first so cascaded deletion of old postings completes
     # before we re-index.  PgBM25Index.index_chunks is idempotent (deletes old
     # postings for these chunk ids before inserting new ones).
+    # 不一致窗口: index_chunks 失败时向量已提交而 postings 缺失;
+    # 重灌同文档即可自愈 (upsert 级联清旧)
     if sparse_index is not None:
         await sparse_index.index_chunks(chunks)
 
