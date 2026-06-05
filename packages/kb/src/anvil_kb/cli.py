@@ -190,9 +190,15 @@ async def _run_eval_with_ingest(
     mode: str = "hybrid",
     rerank: bool = False,
 ) -> None:
-    """Ingest corpus then run eval loop."""
+    """Ingest corpus then run eval loop.
+
+    Supports .md and .pdf files in *corpus_dir*.  PDF bytes are parsed via
+    ``parse_pdf`` before being handed to ``ingest_markdown`` — the same path as
+    the CLI ingest command.
+    """
     from anvil_eval.dataset import load_dataset
 
+    from anvil_kb.ingest.pdf import parse_pdf
     from anvil_kb.ingest.pipeline import ingest_markdown
     from anvil_kb.retrieve.retriever import Retriever
     from anvil_kb.store.bm25 import PgBM25Index
@@ -205,15 +211,20 @@ async def _run_eval_with_ingest(
         sparse_index = PgBM25Index(session_factory)
 
     corpus = Path(corpus_dir)
-    md_files = sorted(corpus.glob("*.md"))
-    if not md_files:
-        print(f"WARNING: no .md files found in {corpus_dir}", file=sys.stderr)
+    corpus_files = sorted(
+        f for f in corpus.iterdir() if f.suffix.lower() in (".md", ".pdf")
+    )
+    if not corpus_files:
+        print(f"WARNING: no .md/.pdf files found in {corpus_dir}", file=sys.stderr)
 
-    print(f"Ingesting {len(md_files)} file(s) from {corpus_dir!r} (mode={mode!r}) ...")
-    for md_path in md_files:
-        source_name = md_path.name
-        title = md_path.stem
-        text = md_path.read_text(encoding="utf-8")
+    print(f"Ingesting {len(corpus_files)} file(s) from {corpus_dir!r} (mode={mode!r}) ...")
+    for file_path in corpus_files:
+        source_name = file_path.name
+        title = file_path.stem
+        if file_path.suffix.lower() == ".pdf":
+            text = parse_pdf(file_path.read_bytes())
+        else:
+            text = file_path.read_text(encoding="utf-8")
         _, n_chunks = await ingest_markdown(
             title=title,
             source_name=source_name,

@@ -780,3 +780,106 @@ class TestRunIngestCommandPdf:
         mock_parse_pdf.assert_not_called()
         # ingest_markdown must still be called
         assert mock_ingest.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# PDF corpus support in eval (D4)
+# ---------------------------------------------------------------------------
+
+
+class TestEvalWithPdfCorpus:
+    """eval --corpus now accepts .pdf files alongside .md files.
+
+    _run_eval_with_ingest must route .pdf corpus files through parse_pdf
+    and .md corpus files through the plain UTF-8 read path.
+    """
+
+    @pytest.mark.asyncio
+    async def test_eval_corpus_dir_with_pdf_calls_parse_pdf(self, tmp_path):
+        """.pdf in corpus dir → parse_pdf called; ingest_markdown receives parsed text."""
+        from anvil_kb.cli import _run_eval_with_ingest
+
+        pdf_file = tmp_path / "doc.pdf"
+        fake_bytes = b"%PDF-1.4 fake"
+        pdf_file.write_bytes(fake_bytes)
+
+        fake_embedder = MagicMock()
+        fake_session_factory = MagicMock()
+        fake_store = MagicMock()
+        fake_bm25 = MagicMock()
+
+        parsed_text = "## 解析后\n\n正文。\n"
+        mock_parse_pdf = MagicMock(return_value=parsed_text)
+        mock_ingest = AsyncMock(return_value=(MagicMock(), 2))
+
+        fake_retriever = AsyncMock()
+        fake_retriever.retrieve = AsyncMock(return_value=[])
+
+        with (
+            patch("anvil_kb.store.pg.PgVectorStore", return_value=fake_store),
+            patch("anvil_kb.store.bm25.PgBM25Index", return_value=fake_bm25),
+            patch("anvil_kb.ingest.pipeline.ingest_markdown", mock_ingest),
+            patch("anvil_kb.ingest.pdf.parse_pdf", mock_parse_pdf),
+            patch("anvil_kb.retrieve.retriever.Retriever", return_value=fake_retriever),
+            patch("anvil_eval.dataset.load_dataset", return_value=[]),
+        ):
+            with pytest.raises(SystemExit):
+                await _run_eval_with_ingest(
+                    dataset_path="d.jsonl",
+                    corpus_dir=str(tmp_path),
+                    k=5,
+                    recall_threshold=0.8,
+                    embedder=fake_embedder,
+                    session_factory=fake_session_factory,
+                    mode="dense",
+                    rerank=False,
+                )
+
+        # parse_pdf must have been called with the raw bytes
+        mock_parse_pdf.assert_called_once_with(fake_bytes)
+        # ingest_markdown must have received the parsed text
+        assert mock_ingest.call_count == 1
+        _, kwargs = mock_ingest.call_args
+        assert kwargs.get("text") == parsed_text
+
+    @pytest.mark.asyncio
+    async def test_eval_corpus_dir_with_md_does_not_call_parse_pdf(self, tmp_path):
+        """.md in corpus dir → parse_pdf must NOT be called; plain read path used."""
+        from anvil_kb.cli import _run_eval_with_ingest
+
+        md_file = tmp_path / "notes.md"
+        md_file.write_text("# Notes\n\nContent.", encoding="utf-8")
+
+        fake_embedder = MagicMock()
+        fake_session_factory = MagicMock()
+        fake_store = MagicMock()
+        fake_bm25 = MagicMock()
+
+        mock_parse_pdf = MagicMock()
+        mock_ingest = AsyncMock(return_value=(MagicMock(), 1))
+
+        fake_retriever = AsyncMock()
+        fake_retriever.retrieve = AsyncMock(return_value=[])
+
+        with (
+            patch("anvil_kb.store.pg.PgVectorStore", return_value=fake_store),
+            patch("anvil_kb.store.bm25.PgBM25Index", return_value=fake_bm25),
+            patch("anvil_kb.ingest.pipeline.ingest_markdown", mock_ingest),
+            patch("anvil_kb.ingest.pdf.parse_pdf", mock_parse_pdf),
+            patch("anvil_kb.retrieve.retriever.Retriever", return_value=fake_retriever),
+            patch("anvil_eval.dataset.load_dataset", return_value=[]),
+        ):
+            with pytest.raises(SystemExit):
+                await _run_eval_with_ingest(
+                    dataset_path="d.jsonl",
+                    corpus_dir=str(tmp_path),
+                    k=5,
+                    recall_threshold=0.8,
+                    embedder=fake_embedder,
+                    session_factory=fake_session_factory,
+                    mode="dense",
+                    rerank=False,
+                )
+
+        mock_parse_pdf.assert_not_called()
+        assert mock_ingest.call_count == 1

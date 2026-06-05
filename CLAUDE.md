@@ -18,11 +18,11 @@
 hand-rolled RAG pipeline:chunker / fastembed / PgVectorStore(pgvector) / Retriever / generate(anvil_gateway chat-default)
 
 - 测试: `uv run pytest packages/kb -q`(db/store 测试需真 PG(anvil_test 库),embed 测试需本地 fastembed 模型;其余走 mock)
-- Golden 语料: `packages/kb/golden/corpus/*.md`(虚构保险产品 3 篇:条款/理赔指南/产品说明);评测集: `packages/kb/golden/kb.jsonl`(12 例,含 evidences/answerable)
+- Golden 语料: `packages/kb/golden/corpus/*.md`(虚构保险产品 3 篇:条款/理赔指南/产品说明);PDF fixture: `packages/kb/golden/pdf/*.pdf`(同三篇,含页眉/页脚/表格版面陷阱);评测集: `packages/kb/golden/kb.jsonl`(16 例,含 evidences/answerable)
 - CLI 三命令(需 `ANVIL_DATABASE_URL` 环境变量):
-  - `anvil-kb ingest <file.md ...>` — 写入 KB
+  - `anvil-kb ingest <file.md|file.pdf ...>` — 写入 KB(.pdf 走 hand-rolled pdfplumber 解析器)
   - `anvil-kb query "<question>" [--k 5]` — 检索+生成(需 API key)
-  - `anvil-kb eval --dataset kb.jsonl --corpus corpus/ [--k 5] [--recall-threshold 0.8] [--mode dense|sparse|hybrid] [--rerank]` — 纯检索评测,不调 LLM;exit 0=达标;hybrid 模式启用 pgvector + BM25 RRF 融合,是默认值;`--rerank` 加入 bge-reranker-base Cross-Encoder 精排(+MRR,+延迟 ~3 s/query)
+  - `anvil-kb eval --dataset kb.jsonl --corpus corpus/ [--k 5] [--recall-threshold 0.8] [--mode dense|sparse|hybrid] [--rerank]` — 纯检索评测,不调 LLM;exit 0=达标;hybrid 模式启用 pgvector + BM25 RRF 融合,是默认值;`--rerank` 加入 bge-reranker-base Cross-Encoder 精排(+MRR,+延迟 ~3 s/query);`--corpus` 同时支持 .md 和 .pdf 文件
 
 ## apps/
 

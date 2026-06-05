@@ -52,8 +52,8 @@ uv run pytest -m "not live" -q
 | anvil-gateway | M5 | 多 provider 统一调用 / fallback / 缓存计账 |
 | anvil-obs | M3 | 自研 OTEL span + Langfuse 导出 |
 | anvil-eval | M4 | 手写 RAGAS 四指标 + golden CI 门禁 |
-| anvil-kb | KB-M3 | hand-rolled RAG:chunker/pgvector/BM25/RRF 混合检索 + Cross-Encoder rerank;CLI ingest/query/eval --mode dense\|sparse\|hybrid [--rerank] |
-| kb-web | KB-M3 | 知识库问答前端:Next.js 16 + SSE 流式答案 + 调试视图（四列：dense/BM25/RRF/Cross-Encoder） |
+| anvil-kb | KB-M4 | hand-rolled RAG:chunker/pgvector/BM25/RRF 混合检索 + Cross-Encoder rerank + .pdf 解析（pdfplumber，无 LLM）;CLI ingest/query/eval --mode dense\|sparse\|hybrid [--rerank] |
+| kb-web | KB-M4 | 知识库问答前端:Next.js 16 + SSE 流式答案 + 调试视图（四列：dense/BM25/RRF/Cross-Encoder）+ .pdf 上传 |
 
 ## 进度
 
@@ -64,6 +64,9 @@ uv run pytest -m "not live" -q
 - [x] M5 proxy:OpenAI 兼容 HTTP proxy shell(非流式 + SSE),curl 实测 DeepSeek → [examples/03-proxy](examples/03-proxy/)
 - [x] KB-M1a 通用知识库核心:chunker / PgVectorStore / pipeline / Retriever / generate + CLI → `anvil-kb eval --dataset packages/kb/golden/kb.jsonl --corpus packages/kb/golden/corpus`
 - [x] KB-M1b 知识库产品:FastAPI kb-api(SSE) + Next.js 前端 + CI web job
+- [x] KB-M2 混合检索对比:BM25 稀疏索引 + RRF 融合 + 调试视图 → hybrid MRR=0.881
+- [x] KB-M3 重排实验:bge-reranker-base Cross-Encoder → hybrid+rerank MRR=0.929（+5.4%，延迟 ~3s）
+- [x] KB-M4 PDF 解析:hand-rolled pdfplumber 解析器（页眉/页脚/表格版面陷阱）;eval --corpus 支持 .pdf;零损耗验证（PDF 管线 recall@5=1.000，MRR=0.893 vs .md 基线 0.881）
 
 ## 知识库产品(apps/)
 
