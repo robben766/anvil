@@ -64,6 +64,8 @@ class PgBM25Index:
         - 幂等:同 chunk 重复 index 前先删其旧 postings,再写新 postings。
         - 单事务:所有 chunk 在同一事务内完成。
         """
+        # NOTE: 单写者假设——并发对同一 chunk 调 index_chunks 可能撞 (term, chunk_id) 复合 PK;
+        # 当前 ingest 串行,无需加锁
         if not chunks:
             return
 

@@ -405,8 +405,15 @@ async def test_search_unknown_query_returns_empty(bm25_store: PgBM25Index) -> No
 
 @pytest.mark.asyncio
 async def test_cascade_delete_cleans_postings(bm25_store: PgBM25Index) -> None:
-    """删除 Document 后,kb_postings 通过 CASCADE 自动清空,search → []。"""
-    from sqlalchemy import text
+    """删除 Document 后,kb_postings 通过 CASCADE 自动清空。
+
+    双重断言:
+    1. 直接查 kb_postings 行数 == 0(不依赖 search() early-exit 假绿)
+    2. search() 也返回 []
+    """
+    from sqlalchemy import func, select, text
+
+    from anvil_kb.db import PostingRow
 
     chunks = [
         _make_chunk(_CHUNK_A_ID, CONTENT_A),
@@ -427,9 +434,117 @@ async def test_cascade_delete_cleans_postings(bm25_store: PgBM25Index) -> None:
         )
     await engine.dispose()
 
-    # 现在搜索 → []
+    # 断言 1: 直接查 kb_postings 行数为 0(不依赖 search 的 n_total==0 早退)
+    from sqlalchemy.ext.asyncio import (
+        AsyncSession,  # noqa: PLC0415
+        async_sessionmaker,
+    )
+    from sqlalchemy.ext.asyncio import create_async_engine as _cae
+
+    verify_engine = _cae(TEST_DB_URL, poolclass=NullPool)
+    verify_factory = async_sessionmaker(verify_engine, class_=AsyncSession, expire_on_commit=False)
+    async with verify_factory() as session:
+        count_row = await session.execute(
+            select(func.count()).select_from(PostingRow)
+        )
+        posting_count = count_row.scalar_one()
+    await verify_engine.dispose()
+    assert posting_count == 0, f"kb_postings 应为空,实际剩 {posting_count} 行"
+
+    # 断言 2: search 也返回 []
     results2 = await bm25_store.search("apple", k=5)
     assert results2 == []
+
+
+@pytest.mark.asyncio
+async def test_digit_token_search(bm25_store: PgBM25Index) -> None:
+    """含数字的中文文本能被正确分词并命中。
+
+    语料: '等待期90天,缴费2024年'
+    先打印/断言 tokenize 实际切分结果,再验证 search 能命中。
+    """
+    content = "等待期90天,缴费2024年"
+    tokens = tokenize(content)
+
+    # 打印实际切分结果以便调试/复查
+    print(f"\ntokenize({content!r}) = {tokens}")
+
+    # 切分结果必须包含数字相关 token(jieba 会切出 "90", "天", "2024", "年" 等)
+    # 以实际切分为准:只要含有 "90" 或 "90天" 即可
+    has_90 = any("90" in t for t in tokens)
+    has_2024 = any("2024" in t for t in tokens)
+    assert has_90, f"tokenize 结果 {tokens} 中未找到包含 '90' 的 token"
+    assert has_2024, f"tokenize 结果 {tokens} 中未找到包含 '2024' 的 token"
+
+    # 插入并索引该 chunk
+    digit_doc_id = uuid.UUID("dddddddd-0000-0000-0000-000000000001")
+    digit_chunk_id = uuid.UUID("dddddddd-0000-0000-0000-000000000002")
+    digit_chunk = Chunk(
+        id=digit_chunk_id,
+        document_id=digit_doc_id,
+        seq=0,
+        content=content,
+        header_path="",
+        start_offset=0,
+        end_offset=len(content),
+        embedding=None,
+    )
+
+    from sqlalchemy import text as sqla_text  # noqa: PLC0415
+    from sqlalchemy.ext.asyncio import create_async_engine as _cae
+
+    from anvil_kb.db import EMBEDDING_DIM
+
+    ins_engine = _cae(TEST_DB_URL, poolclass=NullPool)
+    async with ins_engine.begin() as conn:
+        await conn.execute(
+            sqla_text(
+                "INSERT INTO kb_documents(id, title, source_name, content) "
+                "VALUES (:id, :title, :sn, :content) ON CONFLICT DO NOTHING"
+            ),
+            {
+                "id": str(digit_doc_id),
+                "title": "digit doc",
+                "sn": "digit_source",
+                "content": content,
+            },
+        )
+        zero_emb = [0.0] * EMBEDDING_DIM
+        await conn.execute(
+            sqla_text(
+                "INSERT INTO kb_chunks(id, document_id, seq, content, header_path, "
+                "start_offset, end_offset, embedding, token_count) "
+                "VALUES (:id, :doc_id, :seq, :content, :hp, :so, :eo, :emb, 0) "
+                "ON CONFLICT DO NOTHING"
+            ),
+            {
+                "id": str(digit_chunk_id),
+                "doc_id": str(digit_doc_id),
+                "seq": 0,
+                "content": content,
+                "hp": "",
+                "so": 0,
+                "eo": len(content),
+                "emb": str(zero_emb),
+            },
+        )
+    await ins_engine.dispose()
+
+    await bm25_store.index_chunks([digit_chunk])
+
+    # 找出实际含 "90" 的 token 作为查询词
+    token_90 = next(t for t in tokens if "90" in t)
+    token_2024 = next(t for t in tokens if "2024" in t)
+
+    # search("90天") 或 search("90") 应能命中
+    results_90 = await bm25_store.search(token_90, k=5)
+    assert len(results_90) > 0, f"search({token_90!r}) 应命中,tokens={tokens}"
+    assert results_90[0].chunk.id == digit_chunk_id
+
+    # search("2024") 应能命中
+    results_2024 = await bm25_store.search(token_2024, k=5)
+    assert len(results_2024) > 0, f"search({token_2024!r}) 应命中,tokens={tokens}"
+    assert results_2024[0].chunk.id == digit_chunk_id
 
 
 @pytest.mark.asyncio
