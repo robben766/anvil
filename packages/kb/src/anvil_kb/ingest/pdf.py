@@ -125,7 +125,7 @@ _PAGE_NUM_RE = re.compile(
 )
 
 
-def _detect_repeated(raw_lines: list[_RawLine], num_pages: int) -> set[str]:
+def _detect_repeated(raw_lines: list[_RawLine]) -> set[str]:
     """Return a set of normalised texts that appear on ≥2 pages in the page-top
     or page-bottom zone (i.e. header / footer candidates).
 
@@ -461,13 +461,11 @@ def parse_pdf(data: bytes) -> str:
     try:
         pdf_file = io.BytesIO(data)
         with pdfplumber.open(pdf_file) as pdf:
-            num_pages = len(pdf.pages)
-
             # Step 1: collect raw text lines with font size
             raw_lines = _collect_lines(pdf)
 
             # Step 2: detect repeated header/footer texts
-            repeated_texts = _detect_repeated(raw_lines, num_pages)
+            repeated_texts = _detect_repeated(raw_lines)
 
             # Step 3: body font size (mode across all lines)
             body_size = _body_font_size(raw_lines)
