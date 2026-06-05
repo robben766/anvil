@@ -17,10 +17,38 @@ apps/(递进式四产品)
 
 > Built in public. 每个里程碑配套一篇深度文章与可运行示例(examples/)。
 
+## 快速开始
+
+```bash
+# 1. 安装依赖
+uv sync --all-packages --all-extras
+
+# 2. 配置环境变量
+cp .env.example .env   # 然后填入真实 API key
+
+# 3. 启动基础设施(Langfuse + PostgreSQL)
+docker compose -f infra/docker-compose.yml up -d
+
+# 4. 运行 gateway 示例
+uv run python examples/01-hello-gateway/main.py
+
+# 5. 运行 tracing 示例
+uv run python examples/02-tracing/main.py
+
+# 6. 运行评测
+uvx anvil-eval run --dataset packages/core/eval/golden/demo.jsonl
+
+# 7. 启动 OpenAI 兼容 proxy(见 examples/03-proxy/README.md)
+uv run uvicorn anvil_gateway.proxy.app:app --port 8400
+
+# 8. 运行全量测试(排除真实网络调用)
+uv run pytest -m "not live" -q
+```
+
 ## 进度
 
 - [x] M1 骨架 + CI + Langfuse
 - [x] M2 gateway:统一调用 / fallback / 缓存命中记账 → [examples/01-hello-gateway](examples/01-hello-gateway/)
 - [x] M3 obs:自研 span + OTLP 导出 Langfuse v3,GenAI semconv → [examples/02-tracing](examples/02-tracing/)
 - [x] M4 eval:手写 RAGAS 四指标 + golden set CI 门禁 → `anvil-eval run --dataset packages/core/eval/golden/demo.jsonl`
-- [ ] M5 proxy
+- [x] M5 proxy:OpenAI 兼容 HTTP proxy shell(非流式 + SSE),curl 实测 DeepSeek → [examples/03-proxy](examples/03-proxy/)
