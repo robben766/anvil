@@ -75,14 +75,13 @@ def _scan_blocks(text: str) -> list[_Block]:
 
     # Pending text accumulation for the current section
     pending_lines: list[tuple[int, str]] = []  # (abs_offset, line_str)
-    pending_start: int = 0
 
     # Pending table accumulation
     table_lines: list[tuple[int, str]] = []
     table_start: int = 0
 
     def _flush_text() -> None:
-        nonlocal pending_lines, pending_start
+        nonlocal pending_lines
         if pending_lines:
             start = pending_lines[0][0]
             end = pending_lines[-1][0] + len(pending_lines[-1][1])

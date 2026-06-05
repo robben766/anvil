@@ -120,3 +120,14 @@ def test_overlap_does_not_exceed_section_boundary():
         assert "a" not in c.content
     for c in chunks:
         assert text[c.start_offset:c.end_offset] == c.content
+
+
+def test_real_overlap_shares_line_content():
+    # 10 字符/行;size=25 时窗口含两行(22<25),overlap=10 回退到第二行行首
+    text = "a" * 10 + "\n" + "b" * 10 + "\n" + "c" * 10 + "\n" + "d" * 10 + "\n"
+    chunks = chunk_markdown(text, size=25, overlap=10)
+    assert len(chunks) >= 2
+    # 相邻 chunk 必须共享至少一行内容(overlap 生效)
+    assert chunks[0].content[-11:] == chunks[1].content[:11]
+    for c in chunks:
+        assert text[c.start_offset:c.end_offset] == c.content
