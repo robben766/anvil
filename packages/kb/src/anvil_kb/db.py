@@ -20,7 +20,7 @@ class Base(DeclarativeBase):
 class DocumentRow(Base):
     __tablename__ = "kb_documents"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     title: Mapped[str] = mapped_column(Text, nullable=False)
     source_name: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     content: Mapped[str] = mapped_column(Text, nullable=False)
@@ -32,7 +32,7 @@ class DocumentRow(Base):
 class ChunkRow(Base):
     __tablename__ = "kb_chunks"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     document_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("kb_documents.id", ondelete="CASCADE"),

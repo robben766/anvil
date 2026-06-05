@@ -59,5 +59,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.execute("DROP INDEX IF EXISTS ix_kb_chunks_embedding")
+    op.drop_index("ix_kb_chunks_document_id", table_name="kb_chunks")
     op.drop_table("kb_chunks")
     op.drop_table("kb_documents")
