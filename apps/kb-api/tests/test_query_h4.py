@@ -1006,3 +1006,265 @@ async def test_debug_contributions_rank_exceeds_k(_run_kb_migrations):
         f"Expected contributions.dense=7 (rank > k), got {contrib['dense']!r}. "
         "contributions must be passed through unchanged even when rank > k."
     )
+
+
+# ===========================================================================
+# R2: rerank flag in QueryRequest + dual-Retriever DI
+# ===========================================================================
+
+
+class FakeReranker:
+    """Test reranker that reverses the candidate order (injected via create_app)."""
+
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    def rerank(
+        self, question: str, candidates: list[ScoredChunk], *, top: int
+    ) -> list[ScoredChunk]:
+        self.call_count += 1
+        # Return reversed list truncated to top
+        return list(reversed(candidates))[:top]
+
+
+@pytest.mark.asyncio
+async def test_rerank_false_default_queryrequest(_run_kb_migrations):
+    """QueryRequest without rerank → rerank defaults to False."""
+    from anvil_kb_api.app import QueryRequest
+
+    req = QueryRequest(question="q?")
+    assert req.rerank is False
+
+
+@pytest.mark.asyncio
+async def test_rerank_true_queryrequest(_run_kb_migrations):
+    """QueryRequest with rerank=True → rerank field is True."""
+    from anvil_kb_api.app import QueryRequest
+
+    req = QueryRequest(question="q?", rerank=True)
+    assert req.rerank is True
+
+
+@pytest.mark.asyncio
+async def test_rerank_true_uses_reranked_order(_run_kb_migrations):
+    """rerank=true with injected reranker → sources order is reranked (reversed here)."""
+    from anvil_kb_api.app import create_app
+
+    scored = [
+        _make_scored_chunk("chunk A", seq=0, score=0.95),
+        _make_scored_chunk("chunk B", seq=1, score=0.80),
+        _make_scored_chunk("chunk C", seq=2, score=0.70),
+    ]
+
+    class FakeRetrieverPlain:
+        async def retrieve(self, question: str, k: int = 5) -> list[ScoredChunk]:
+            return scored[:k]
+
+    fake_reranker = FakeReranker()
+    fake_chat = _make_fake_chat_stream(["答案。"])
+
+    engine, sf = _make_engine_and_sf()
+    app = create_app(
+        session_factory=sf,
+        embedder=FakeEmbedder(),
+        retriever=FakeRetrieverPlain(),
+        reranker=fake_reranker,
+        chat=fake_chat,
+    )
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        async with client.stream(
+            "POST",
+            "/v1/kb/query",
+            json={"question": "等待期?", "stream": True, "rerank": True, "k": 3},
+        ) as resp:
+            raw = await resp.aread()
+
+    await engine.dispose()
+
+    events = _parse_sse_events(raw.decode())
+    sources_event = next(e for e in events if e["event"] == "sources")
+    sources = json.loads(sources_event["data"])
+
+    # FakeReranker reverses order → chunk C first, chunk A last
+    assert sources[0]["quote"] == "chunk C", (
+        f"Expected reranked order (reversed): first chunk should be 'chunk C', "
+        f"got {sources[0]['quote']!r}"
+    )
+    assert sources[-1]["quote"] == "chunk A", (
+        f"Expected reranked order (reversed): last chunk should be 'chunk A', "
+        f"got {sources[-1]['quote']!r}"
+    )
+    assert fake_reranker.call_count == 1, "Reranker must be called exactly once"
+
+
+@pytest.mark.asyncio
+async def test_rerank_false_does_not_call_reranker(_run_kb_migrations):
+    """rerank=false → reranker.rerank is never called."""
+    from anvil_kb_api.app import create_app
+
+    scored = [
+        _make_scored_chunk("chunk A", seq=0, score=0.95),
+        _make_scored_chunk("chunk B", seq=1, score=0.80),
+    ]
+
+    class FakeRetrieverPlain:
+        async def retrieve(self, question: str, k: int = 5) -> list[ScoredChunk]:
+            return scored[:k]
+
+    fake_reranker = FakeReranker()
+    fake_chat = _make_fake_chat_stream(["答案。"])
+
+    engine, sf = _make_engine_and_sf()
+    app = create_app(
+        session_factory=sf,
+        embedder=FakeEmbedder(),
+        retriever=FakeRetrieverPlain(),
+        reranker=fake_reranker,
+        chat=fake_chat,
+    )
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        async with client.stream(
+            "POST",
+            "/v1/kb/query",
+            json={"question": "等待期?", "stream": True, "rerank": False},
+        ) as resp:
+            await resp.aread()
+
+    await engine.dispose()
+
+    assert fake_reranker.call_count == 0, (
+        "Reranker must NOT be called when rerank=false"
+    )
+
+
+@pytest.mark.asyncio
+async def test_rerank_true_debug_frame_contains_reranked_key(_run_kb_migrations):
+    """rerank=true + debug=true → debug payload must contain 'reranked' key (non-null)."""
+    from anvil_kb_api.app import create_app
+
+    scored = [
+        _make_scored_chunk("chunk A", seq=0, score=0.95),
+        _make_scored_chunk("chunk B", seq=1, score=0.80),
+    ]
+
+    class FakeRetrieverWithDebugAndRerank:
+        async def retrieve(self, question: str, k: int = 5) -> list[ScoredChunk]:
+            return scored[:k]
+
+        async def retrieve_debug(self, question: str, k: int = 5) -> RetrievalDebug:
+            top = scored[:k]
+            dense = [ScoredChunk(chunk=sc.chunk, score=sc.score) for sc in top]
+            sparse = [ScoredChunk(chunk=sc.chunk, score=sc.score * 0.8) for sc in top]
+            fused = top
+            contributions = {
+                str(sc.chunk.id): {"dense": i + 1, "sparse": None}
+                for i, sc in enumerate(top)
+            }
+            return RetrievalDebug(
+                dense=dense,
+                sparse=sparse,
+                fused=fused,
+                contributions=contributions,
+            )
+
+    fake_reranker = FakeReranker()
+    fake_chat = _make_fake_chat_stream(["答案。"])
+
+    engine, sf = _make_engine_and_sf()
+    app = create_app(
+        session_factory=sf,
+        embedder=FakeEmbedder(),
+        retriever=FakeRetrieverWithDebugAndRerank(),
+        reranker=fake_reranker,
+        chat=fake_chat,
+    )
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        async with client.stream(
+            "POST",
+            "/v1/kb/query",
+            json={"question": "等待期?", "stream": True, "debug": True, "rerank": True},
+        ) as resp:
+            raw = await resp.aread()
+
+    await engine.dispose()
+
+    events = _parse_sse_events(raw.decode())
+    debug_event = next(e for e in events if e["event"] == "debug")
+    payload = json.loads(debug_event["data"])
+
+    assert "reranked" in payload, (
+        f"debug payload must contain 'reranked' key when rerank=true; keys={list(payload.keys())}"
+    )
+    assert payload["reranked"] is not None, "debug.reranked must be non-null when rerank=true"
+
+    # Each reranked item must have the same structure as fused items
+    required_fields = ("n", "chunk_id", "quote_head", "score", "rank")
+    for item in payload["reranked"]:
+        for field in required_fields:
+            assert field in item, f"reranked item missing field: {field}"
+
+
+@pytest.mark.asyncio
+async def test_rerank_false_debug_frame_reranked_is_null(_run_kb_migrations):
+    """rerank=false + debug=true → debug payload 'reranked' key is null."""
+    from anvil_kb_api.app import create_app
+
+    scored = [_make_scored_chunk("chunk A", seq=0, score=0.95)]
+
+    class FakeRetrieverWithDebugOnly:
+        async def retrieve(self, question: str, k: int = 5) -> list[ScoredChunk]:
+            return scored[:k]
+
+        async def retrieve_debug(self, question: str, k: int = 5) -> RetrievalDebug:
+            top = scored[:k]
+            dense = [ScoredChunk(chunk=sc.chunk, score=sc.score) for sc in top]
+            sparse = [ScoredChunk(chunk=sc.chunk, score=sc.score * 0.8) for sc in top]
+            contributions = {
+                str(sc.chunk.id): {"dense": i + 1, "sparse": None}
+                for i, sc in enumerate(top)
+            }
+            return RetrievalDebug(
+                dense=dense, sparse=sparse, fused=top, contributions=contributions
+            )
+
+    fake_chat = _make_fake_chat_stream(["答案。"])
+
+    engine, sf = _make_engine_and_sf()
+    app = create_app(
+        session_factory=sf,
+        embedder=FakeEmbedder(),
+        retriever=FakeRetrieverWithDebugOnly(),
+        reranker=None,
+        chat=fake_chat,
+    )
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        async with client.stream(
+            "POST",
+            "/v1/kb/query",
+            json={"question": "等待期?", "stream": True, "debug": True, "rerank": False},
+        ) as resp:
+            raw = await resp.aread()
+
+    await engine.dispose()
+
+    events = _parse_sse_events(raw.decode())
+    debug_event = next(e for e in events if e["event"] == "debug")
+    payload = json.loads(debug_event["data"])
+
+    # reranked must be null (not absent) when rerank=false
+    assert "reranked" in payload, "debug payload must always include 'reranked' key"
+    assert payload["reranked"] is None, (
+        f"debug.reranked must be null when rerank=false, got {payload['reranked']!r}"
+    )

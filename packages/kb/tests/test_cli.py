@@ -383,8 +383,9 @@ class TestRunQueryCommand:
         mock_bm25.assert_called_once_with(fake_session_factory)
 
         # Retriever must be constructed with sparse_index=bm25 and mode="hybrid"
+        # reranker=None when --rerank not passed (default)
         mock_retriever_cls.assert_called_once_with(
-            fake_embedder, fake_store, sparse_index=fake_bm25, mode="hybrid"
+            fake_embedder, fake_store, sparse_index=fake_bm25, mode="hybrid", reranker=None
         )
 
         # retrieve was called with the question and k
@@ -497,3 +498,204 @@ class TestRunIngestCommand:
             assert kwargs.get("sparse_index") is fake_bm25, (
                 f"call {i}: ingest_markdown must receive sparse_index=bm25"
             )
+
+
+# ---------------------------------------------------------------------------
+# --rerank flag tests  (R2)
+# ---------------------------------------------------------------------------
+
+
+class TestRerankFlag:
+    """--rerank flag wires FastEmbedReranker into Retriever; default → no reranker."""
+
+    def test_parser_rerank_flag_default_false(self):
+        """--rerank not passed → args.rerank is False (store_true default)."""
+        parser = _build_parser()
+        args = parser.parse_args(["eval", "--dataset", "d.jsonl", "--corpus", "c/"])
+        assert args.rerank is False
+
+    def test_parser_rerank_flag_set_true(self):
+        """--rerank passed → args.rerank is True."""
+        parser = _build_parser()
+        args = parser.parse_args(["eval", "--dataset", "d.jsonl", "--corpus", "c/", "--rerank"])
+        assert args.rerank is True
+
+    def test_parser_query_rerank_flag_default_false(self):
+        parser = _build_parser()
+        args = parser.parse_args(["query", "some question"])
+        assert args.rerank is False
+
+    def test_parser_query_rerank_flag_set_true(self):
+        parser = _build_parser()
+        args = parser.parse_args(["query", "some question", "--rerank"])
+        assert args.rerank is True
+
+    @pytest.mark.asyncio
+    async def test_eval_with_rerank_passes_reranker_to_retriever(self):
+        """--rerank=True → Retriever is constructed with reranker=FastEmbedReranker instance."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from anvil_kb.cli import _run_eval_with_ingest
+
+        fake_embedder = MagicMock()
+        fake_session_factory = MagicMock()
+        fake_store = MagicMock()
+        fake_bm25 = MagicMock()
+
+        fake_retriever = AsyncMock()
+        fake_case = MagicMock()
+        fake_case.answerable = True
+        fake_case.id = "c1"
+        fake_case.question = "q?"
+        fake_case.evidences = ["ev"]
+        sc = _make_scored_chunk("ev content here")
+        fake_retriever.retrieve = AsyncMock(return_value=[sc])
+
+        fake_reranker_instance = MagicMock()
+
+        with (
+            patch("anvil_kb.store.pg.PgVectorStore", return_value=fake_store),
+            patch("anvil_kb.store.bm25.PgBM25Index", return_value=fake_bm25),
+            patch(
+                "anvil_kb.retrieve.retriever.Retriever", return_value=fake_retriever
+            ) as mock_retriever_cls,
+            patch(
+                "anvil_kb.retrieve.rerank.FastEmbedReranker",
+                return_value=fake_reranker_instance,
+            ) as mock_reranker_cls,
+            patch("anvil_eval.dataset.load_dataset", return_value=[fake_case]),
+            patch(
+                "anvil_kb.ingest.pipeline.ingest_markdown",
+                new=AsyncMock(return_value=(MagicMock(), 1)),
+            ),
+        ):
+            with pytest.raises(SystemExit):
+                await _run_eval_with_ingest(
+                    dataset_path="d.jsonl",
+                    corpus_dir=".",
+                    k=5,
+                    recall_threshold=0.8,
+                    embedder=fake_embedder,
+                    session_factory=fake_session_factory,
+                    mode="dense",
+                    rerank=True,
+                )
+
+        # FastEmbedReranker must have been constructed
+        mock_reranker_cls.assert_called_once()
+        # Retriever must have been constructed with reranker=fake_reranker_instance
+        call_kwargs = mock_retriever_cls.call_args
+        assert call_kwargs.kwargs.get("reranker") is fake_reranker_instance, (
+            f"Retriever must receive reranker=FastEmbedReranker, "
+            f"got reranker={call_kwargs.kwargs.get('reranker')!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_eval_without_rerank_passes_no_reranker(self):
+        """--rerank not set (default) → Retriever constructed with reranker=None."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from anvil_kb.cli import _run_eval_with_ingest
+
+        fake_embedder = MagicMock()
+        fake_session_factory = MagicMock()
+        fake_store = MagicMock()
+        fake_bm25 = MagicMock()
+
+        fake_retriever = AsyncMock()
+        fake_retriever.retrieve = AsyncMock(return_value=[])
+
+        with (
+            patch("anvil_kb.store.pg.PgVectorStore", return_value=fake_store),
+            patch("anvil_kb.store.bm25.PgBM25Index", return_value=fake_bm25),
+            patch(
+                "anvil_kb.retrieve.retriever.Retriever", return_value=fake_retriever
+            ) as mock_retriever_cls,
+            patch("anvil_kb.retrieve.rerank.FastEmbedReranker") as mock_reranker_cls,
+            patch("anvil_eval.dataset.load_dataset", return_value=[]),
+            patch(
+                "anvil_kb.ingest.pipeline.ingest_markdown",
+                new=AsyncMock(return_value=(MagicMock(), 1)),
+            ),
+        ):
+            with pytest.raises(SystemExit):
+                await _run_eval_with_ingest(
+                    dataset_path="d.jsonl",
+                    corpus_dir=".",
+                    k=5,
+                    recall_threshold=0.8,
+                    embedder=fake_embedder,
+                    session_factory=fake_session_factory,
+                    mode="dense",
+                    rerank=False,
+                )
+
+        # FastEmbedReranker must NOT have been constructed
+        mock_reranker_cls.assert_not_called()
+        # Retriever must have been constructed with reranker=None (or absent)
+        call_kwargs = mock_retriever_cls.call_args
+        assert call_kwargs.kwargs.get("reranker") is None
+
+
+# ---------------------------------------------------------------------------
+# eval retrieval latency stats  (R2)
+# ---------------------------------------------------------------------------
+
+
+class TestEvalRetrievalLatency:
+    """eval subcommand prints 'mean retrieval latency: X.X ms' line after the table."""
+
+    @pytest.mark.asyncio
+    async def test_eval_prints_mean_retrieval_latency_line(self, capsys):
+        """Output must contain a line matching 'mean retrieval latency: ... ms'."""
+        from anvil_eval.dataset import GoldenCase
+
+        from anvil_kb.cli import _run_eval_command
+
+        case1 = GoldenCase(
+            id="t1", question="q1", reference="r", evidences=["ev one"], answerable=True
+        )
+        sc = _make_scored_chunk("ev one here")
+        fake_retriever = AsyncMock()
+        fake_retriever.retrieve = AsyncMock(return_value=[sc])
+
+        with pytest.raises(SystemExit):
+            await _run_eval_command(
+                cases=[case1],
+                retriever=fake_retriever,
+                k=5,
+                recall_threshold=0.8,
+            )
+
+        captured = capsys.readouterr()
+        assert "mean retrieval latency" in captured.out.lower(), (
+            f"Expected 'mean retrieval latency' line in output, got:\n{captured.out}"
+        )
+        assert "ms" in captured.out, "Latency line must include 'ms' unit"
+
+    @pytest.mark.asyncio
+    async def test_eval_latency_not_printed_for_zero_answerable_cases(self, capsys):
+        """All unanswerable → retrieve never called → latency line should still appear
+        (shows 0.0 ms or similar) so callers can parse it consistently."""
+        from anvil_eval.dataset import GoldenCase
+
+        from anvil_kb.cli import _run_eval_command
+
+        skip_case = GoldenCase(
+            id="s1", question="q?", reference="r", evidences=[], answerable=False
+        )
+        fake_retriever = AsyncMock()
+        fake_retriever.retrieve = AsyncMock()
+
+        with pytest.raises(SystemExit):
+            await _run_eval_command(
+                cases=[skip_case],
+                retriever=fake_retriever,
+                k=5,
+                recall_threshold=0.8,
+            )
+
+        captured = capsys.readouterr()
+        assert "mean retrieval latency" in captured.out.lower(), (
+            "latency line must appear even when no answerable cases"
+        )

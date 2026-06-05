@@ -69,6 +69,7 @@ class QueryRequest(BaseModel):
     k: int = Field(5, ge=1, le=20)
     stream: bool = True
     debug: bool = False
+    rerank: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -143,9 +144,14 @@ def _debug_list(scored_chunks: list[ScoredChunk], *, include_contributions: bool
     return items
 
 
-def _build_debug_payload(debug_result) -> dict:
-    """Convert a RetrievalDebug into the SSE debug frame payload."""
-    return {
+def _build_debug_payload(debug_result, *, reranked: list | None = None) -> dict:
+    """Convert a RetrievalDebug into the SSE debug frame payload.
+
+    Args:
+        debug_result:  RetrievalDebug from retrieve_debug().
+        reranked:      Post-rerank ScoredChunk list (None → null in JSON).
+    """
+    payload: dict = {
         "dense": _debug_list(debug_result.dense),
         "sparse": _debug_list(debug_result.sparse),
         "fused": _debug_list(
@@ -153,7 +159,9 @@ def _build_debug_payload(debug_result) -> dict:
             include_contributions=True,
             contributions=debug_result.contributions,
         ),
+        "reranked": _debug_list(reranked) if reranked is not None else None,
     }
+    return payload
 
 
 def _check_auth(authorization: str | None) -> None:
@@ -177,6 +185,7 @@ def create_app(
     session_factory: async_sessionmaker[AsyncSession] | None = None,
     embedder: Embedder | None = None,
     retriever: Any | None = None,
+    reranker: Any | None = None,
     chat: Any | None = None,
 ) -> FastAPI:
     """Factory for the FastAPI application (DI entry point for tests).
@@ -184,7 +193,16 @@ def create_app(
     session_factory=None → lazy-build from ANVIL_DATABASE_URL env var.
     embedder=None        → FastEmbedEmbedder() (lazy local model).
     retriever=None       → Retriever(embedder, store, sparse_index, mode='hybrid').
+    reranker=None        → lazy-construct FastEmbedReranker on first rerank=true request.
     chat=None            → anvil_gateway.chat (default LLM backend).
+
+    Dual-Retriever design (R2):
+        Two Retriever instances sharing the same store/embedder/sparse_index:
+          _retriever       — plain retriever (no reranker), used when rerank=false
+          _retriever_rerank — retriever with reranker, used when rerank=true
+        The reranker for _retriever_rerank is:
+          - injected `reranker` param (tests / custom deployment), OR
+          - a module-level shared FastEmbedReranker (lazy-loaded on first rerank=true request)
     """
     # Resolve dependencies
     if session_factory is None:
@@ -204,6 +222,30 @@ def create_app(
         # Injected retriever (tests); also keep sparse_index reference for ingest dual-write
         _retriever = retriever
         sparse_index = None  # no dual-write when test retriever is injected
+
+    # R2: dual-Retriever — rerank variant shares store/embedder/sparse_index
+    # The reranker is injected (tests) or will be lazy-loaded on first rerank=true request.
+    # We capture the injected reranker; lazy-load state lives in the closure below.
+    _injected_reranker = reranker
+    # Mutable container so closure can assign
+    _shared_reranker: list[Any] = []  # _shared_reranker[0] once initialised
+
+    def _get_or_build_reranker() -> Any:
+        """Return the effective reranker: injected takes priority, else lazy-create shared."""
+        if _injected_reranker is not None:
+            return _injected_reranker
+        if not _shared_reranker:
+            from anvil_kb.retrieve.rerank import FastEmbedReranker
+            _shared_reranker.append(FastEmbedReranker())
+        return _shared_reranker[0]
+
+    if retriever is None:
+        # Build the rerank variant now (reranker resolved lazily at request time via closure)
+        # We build it with a placeholder; actual reranker fetched per-request.
+        # Simpler: build it lazily when first rerank=true request arrives.
+        _retriever_rerank: Any = None  # sentinel — built lazily below
+    else:
+        _retriever_rerank = None  # injected retriever path; reranker applied manually
 
     # H4: parse CORS origins from environment
     # 空串/纯空格的 env 值视为未配置，fallback 到 ["*"]，避免 CORSMiddleware 收到空列表
@@ -408,19 +450,80 @@ def create_app(
                 ),
             )
 
+        # R2: resolve the effective retriever for this request.
+        # When rerank=true:
+        #   - If a retriever was injected (tests), apply the reranker manually post-retrieve.
+        #   - If no retriever was injected, use (or lazily build) a Retriever with reranker.
+        # When rerank=false:
+        #   - Always use _retriever (zero behaviour change).
+        def _effective_retriever_and_reranker():
+            """Return (active_retriever, post_reranker_or_None).
+
+            post_reranker_or_None is the reranker to apply manually after retrieve()
+            when the retriever itself does not encapsulate reranking.
+            """
+            if not req.rerank:
+                return _retriever, None
+
+            # rerank=true path
+            if retriever is None:
+                # No injected retriever: build or reuse a Retriever with the reranker.
+                # We use a nonlocal-like pattern via the outer _retriever_rerank variable.
+                # Since we can't reassign the outer variable directly in Python, we
+                # build it lazily using the reranker closure and wrap into a new Retriever.
+                nonlocal _retriever_rerank
+                if _retriever_rerank is None:
+                    assert sparse_index is not None
+                    _retriever_rerank = Retriever(
+                        embedder,
+                        store,
+                        sparse_index=sparse_index,
+                        mode="hybrid",
+                        reranker=_get_or_build_reranker(),
+                    )
+                return _retriever_rerank, None
+            else:
+                # Injected retriever — apply the effective reranker manually after retrieve
+                return _retriever, _get_or_build_reranker()
+
+        active_retriever, post_reranker = _effective_retriever_and_reranker()
+
         if req.stream:
             # --- SSE streaming path ---
             async def _sse_generator():
                 try:
                     if req.debug:
                         # H4: debug path — retrieve_debug then use fused as retrieved
-                        debug_result = await _retriever.retrieve_debug(req.question, req.k)
-                        retrieved = debug_result.fused
+                        debug_result = await active_retriever.retrieve_debug(req.question, req.k)
+                        fused_candidates = debug_result.fused
+
+                        # R2: if rerank=true, apply reranker to the fused candidates
+                        if req.rerank and post_reranker is not None:
+                            reranked_chunks = post_reranker.rerank(
+                                req.question, fused_candidates, top=req.k
+                            )
+                        else:
+                            reranked_chunks = None
+
+                        retrieved = (
+                            reranked_chunks if reranked_chunks is not None else fused_candidates
+                        )
+
                         # Emit debug frame BEFORE sources
-                        yield _sse_event("debug", _build_debug_payload(debug_result))
+                        yield _sse_event(
+                            "debug",
+                            _build_debug_payload(debug_result, reranked=reranked_chunks),
+                        )
                     else:
                         # Normal path — zero extra overhead
-                        retrieved = await _retriever.retrieve(req.question, req.k)
+                        raw_retrieved = await active_retriever.retrieve(req.question, req.k)
+                        # R2: manual reranker application (injected retriever path)
+                        if req.rerank and post_reranker is not None:
+                            retrieved = post_reranker.rerank(
+                                req.question, raw_retrieved, top=req.k
+                            )
+                        else:
+                            retrieved = raw_retrieved
 
                     async for event_type, payload in answer_stream(
                         req.question,
@@ -455,7 +558,11 @@ def create_app(
 
         else:
             # --- Non-streaming JSON path ---
-            retrieved = await _retriever.retrieve(req.question, req.k)
+            raw_retrieved = await active_retriever.retrieve(req.question, req.k)
+            if req.rerank and post_reranker is not None:
+                retrieved = post_reranker.rerank(req.question, raw_retrieved, top=req.k)
+            else:
+                retrieved = raw_retrieved
             kb_answer = await answer(req.question, retrieved, chat=chat)
             return {
                 "text": kb_answer.text,

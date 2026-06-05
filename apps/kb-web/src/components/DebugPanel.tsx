@@ -5,8 +5,8 @@ interface Props {
 }
 
 /**
- * Three-column grid showing the raw retrieval internals:
- *   Dense (vector) | Sparse (BM25) | Fused (RRF)
+ * Three- or four-column grid showing the raw retrieval internals:
+ *   Dense (vector) | Sparse (BM25) | Fused (RRF) | Cross-Encoder 重排 (optional)
  *
  * Row background:
  *   - chunk_id appears in BOTH dense and sparse → white
@@ -15,7 +15,7 @@ interface Props {
  * Pure display — no side effects.
  */
 export default function DebugPanel({ frame }: Props) {
-  const { dense, sparse, fused } = frame;
+  const { dense, sparse, fused, reranked } = frame;
 
   // Build sets for intersection/difference computation
   const denseIds = new Set(dense.map((d) => d.chunk_id));
@@ -31,7 +31,7 @@ export default function DebugPanel({ frame }: Props) {
   }
 
   return (
-    <div className="grid grid-cols-3 gap-2 text-xs font-mono">
+    <div className={`grid ${reranked !== null ? "grid-cols-4" : "grid-cols-3"} gap-2 text-xs font-mono`}>
       {/* Dense column */}
       <div className="rounded border border-slate-200 overflow-hidden">
         <div className="bg-slate-100 px-2 py-1 font-semibold text-slate-700 text-center">
@@ -129,6 +129,35 @@ export default function DebugPanel({ frame }: Props) {
           })
         )}
       </div>
+
+      {/* Cross-Encoder 重排 column — only shown when reranked is non-null */}
+      {reranked !== null && (
+        <div className="rounded border border-purple-200 overflow-hidden">
+          <div className="bg-purple-50 px-2 py-1 font-semibold text-purple-700 text-center">
+            Cross-Encoder 重排
+          </div>
+          {reranked.length === 0 ? (
+            <div className="px-2 py-1 text-slate-400 text-center">—</div>
+          ) : (
+            reranked.map((item: DebugItem) => (
+              <div
+                key={item.chunk_id}
+                className="flex items-baseline justify-between px-2 py-1 border-t border-purple-100 bg-white"
+              >
+                <span className="text-slate-700 truncate max-w-[70%]">
+                  <span className="font-semibold text-purple-500">
+                    #{item.rank}
+                  </span>{" "}
+                  {item.quote_head}
+                </span>
+                <span className="text-slate-400 shrink-0 tabular-nums ml-1">
+                  {item.score.toFixed(4)}
+                </span>
+              </div>
+            ))
+          )}
+        </div>
+      )}
     </div>
   );
 }

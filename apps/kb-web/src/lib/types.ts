@@ -49,4 +49,6 @@ export interface DebugFrame {
   dense: DebugItem[];
   sparse: DebugItem[];
   fused: DebugItem[];
+  /** Cross-encoder reranked order; null when rerank was not requested. */
+  reranked: DebugItem[] | null;
 }

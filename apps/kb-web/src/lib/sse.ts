@@ -31,6 +31,7 @@ export function streamQuery(
   k: number,
   cb: SseCallbacks,
   debug?: boolean,
+  rerank?: boolean,
 ): () => void {
   const controller = new AbortController();
 
@@ -40,7 +41,13 @@ export function streamQuery(
       resp = await fetch(`${BASE}/v1/kb/query`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question, k, stream: true, ...(debug ? { debug: true } : {}) }),
+        body: JSON.stringify({
+          question,
+          k,
+          stream: true,
+          ...(debug ? { debug: true } : {}),
+          ...(rerank ? { rerank: true } : {}),
+        }),
         signal: controller.signal,
       });
     } catch (err) {
