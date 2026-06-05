@@ -883,3 +883,297 @@ class TestEvalWithPdfCorpus:
 
         mock_parse_pdf.assert_not_called()
         assert mock_ingest.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# --enrich flag tests  (C2)
+# ---------------------------------------------------------------------------
+
+
+class TestEnrichFlag:
+    """--enrich flag wires anvil_gateway.chat into ingest_markdown; default → None."""
+
+    def test_parser_ingest_enrich_flag_default_false(self):
+        """--enrich not passed → args.enrich is False."""
+        parser = _build_parser()
+        args = parser.parse_args(["ingest", "a.md"])
+        assert args.enrich is False
+
+    def test_parser_ingest_enrich_flag_set_true(self):
+        """--enrich passed → args.enrich is True."""
+        parser = _build_parser()
+        args = parser.parse_args(["ingest", "a.md", "--enrich"])
+        assert args.enrich is True
+
+    def test_parser_eval_enrich_flag_default_false(self):
+        """--enrich not passed on eval → args.enrich is False."""
+        parser = _build_parser()
+        args = parser.parse_args(["eval", "--dataset", "d.jsonl", "--corpus", "c/"])
+        assert args.enrich is False
+
+    def test_parser_eval_enrich_flag_set_true(self):
+        """--enrich passed on eval → args.enrich is True."""
+        parser = _build_parser()
+        args = parser.parse_args(["eval", "--dataset", "d.jsonl", "--corpus", "c/", "--enrich"])
+        assert args.enrich is True
+
+    @pytest.mark.asyncio
+    async def test_ingest_without_enrich_passes_enrich_chat_none(self, tmp_path):
+        """Default (no --enrich) → ingest_markdown called with enrich_chat=None."""
+        md_file = tmp_path / "doc.md"
+        md_file.write_text("# Test\n\nContent.", encoding="utf-8")
+
+        fake_embedder = MagicMock()
+        fake_session_factory = MagicMock()
+        mock_ingest = AsyncMock(return_value=(MagicMock(), 1))
+
+        with (
+            patch("anvil_kb.store.pg.PgVectorStore", return_value=MagicMock()),
+            patch("anvil_kb.store.bm25.PgBM25Index", return_value=MagicMock()),
+            patch("anvil_kb.ingest.pipeline.ingest_markdown", mock_ingest),
+        ):
+            await _run_ingest_command(
+                [str(md_file)], fake_embedder, fake_session_factory, enrich=False
+            )
+
+        _, kwargs = mock_ingest.call_args
+        assert kwargs.get("enrich_chat") is None
+
+    @pytest.mark.asyncio
+    async def test_ingest_with_enrich_passes_enrich_chat_non_none(self, tmp_path):
+        """--enrich=True → ingest_markdown called with enrich_chat non-None."""
+        md_file = tmp_path / "doc.md"
+        md_file.write_text("# Test\n\nContent.", encoding="utf-8")
+
+        fake_embedder = MagicMock()
+        fake_session_factory = MagicMock()
+        mock_ingest = AsyncMock(return_value=(MagicMock(), 1))
+        fake_chat = MagicMock()
+        fake_gw_session_factory = MagicMock()
+
+        with (
+            patch("anvil_kb.store.pg.PgVectorStore", return_value=MagicMock()),
+            patch("anvil_kb.store.bm25.PgBM25Index", return_value=MagicMock()),
+            patch("anvil_kb.ingest.pipeline.ingest_markdown", mock_ingest),
+            patch("anvil_gateway.chat", fake_chat, create=True),
+            patch(
+                "anvil_kb.cli._make_gateway_session_factory",
+                return_value=fake_gw_session_factory,
+            ),
+            patch("anvil_kb.cli._query_enrich_usage", return_value=[]),
+        ):
+            await _run_ingest_command(
+                [str(md_file)], fake_embedder, fake_session_factory, enrich=True
+            )
+
+        _, kwargs = mock_ingest.call_args
+        assert kwargs.get("enrich_chat") is not None
+
+
+# ---------------------------------------------------------------------------
+# summarize_enrich_usage pure-function tests  (C2)
+# ---------------------------------------------------------------------------
+
+
+class TestSummarizeEnrichUsage:
+    """Hand-calculated unit tests for summarize_enrich_usage pure function."""
+
+    def _make_row(
+        self,
+        *,
+        prompt_tokens: int,
+        cached_tokens: int,
+        cost_cny,
+    ) -> object:
+        """Build a minimal UsageRecordRow-like dict for testing."""
+        return {
+            "prompt_tokens": prompt_tokens,
+            "cached_tokens": cached_tokens,
+            "cost_cny": cost_cny,
+        }
+
+    def test_summarize_three_rows_calls(self):
+        """3 rows → calls == 3."""
+        from decimal import Decimal
+
+        from anvil_kb.cli import summarize_enrich_usage
+
+        rows = [
+            self._make_row(prompt_tokens=100, cached_tokens=20, cost_cny=Decimal("0.010000")),
+            self._make_row(prompt_tokens=200, cached_tokens=80, cost_cny=Decimal("0.020000")),
+            self._make_row(prompt_tokens=150, cached_tokens=0, cost_cny=Decimal("0.015000")),
+        ]
+        result = summarize_enrich_usage(rows)
+        assert result["calls"] == 3
+
+    def test_summarize_three_rows_prompt_tokens(self):
+        """3 rows → prompt_tokens = 100+200+150 = 450."""
+        from decimal import Decimal
+
+        from anvil_kb.cli import summarize_enrich_usage
+
+        rows = [
+            self._make_row(prompt_tokens=100, cached_tokens=20, cost_cny=Decimal("0.010000")),
+            self._make_row(prompt_tokens=200, cached_tokens=80, cost_cny=Decimal("0.020000")),
+            self._make_row(prompt_tokens=150, cached_tokens=0, cost_cny=Decimal("0.015000")),
+        ]
+        result = summarize_enrich_usage(rows)
+        assert result["prompt_tokens"] == 450
+
+    def test_summarize_three_rows_cached_tokens(self):
+        """3 rows → cached_tokens = 20+80+0 = 100."""
+        from decimal import Decimal
+
+        from anvil_kb.cli import summarize_enrich_usage
+
+        rows = [
+            self._make_row(prompt_tokens=100, cached_tokens=20, cost_cny=Decimal("0.010000")),
+            self._make_row(prompt_tokens=200, cached_tokens=80, cost_cny=Decimal("0.020000")),
+            self._make_row(prompt_tokens=150, cached_tokens=0, cost_cny=Decimal("0.015000")),
+        ]
+        result = summarize_enrich_usage(rows)
+        assert result["cached_tokens"] == 100
+
+    def test_summarize_three_rows_cache_hit_rate(self):
+        """cache_hit_rate = Σcached / Σprompt = 100/450 ≈ 0.2222."""
+        from decimal import Decimal
+
+        from anvil_kb.cli import summarize_enrich_usage
+
+        rows = [
+            self._make_row(prompt_tokens=100, cached_tokens=20, cost_cny=Decimal("0.010000")),
+            self._make_row(prompt_tokens=200, cached_tokens=80, cost_cny=Decimal("0.020000")),
+            self._make_row(prompt_tokens=150, cached_tokens=0, cost_cny=Decimal("0.015000")),
+        ]
+        result = summarize_enrich_usage(rows)
+        assert result["cache_hit_rate"] == pytest.approx(100 / 450)
+
+    def test_summarize_three_rows_cost_decimal_precision(self):
+        """cost = 0.010000+0.020000+0.015000 = 0.045000; Decimal, no float rounding."""
+        from decimal import Decimal
+
+        from anvil_kb.cli import summarize_enrich_usage
+
+        rows = [
+            self._make_row(prompt_tokens=100, cached_tokens=20, cost_cny=Decimal("0.010000")),
+            self._make_row(prompt_tokens=200, cached_tokens=80, cost_cny=Decimal("0.020000")),
+            self._make_row(prompt_tokens=150, cached_tokens=0, cost_cny=Decimal("0.015000")),
+        ]
+        result = summarize_enrich_usage(rows)
+        assert result["cost"] == Decimal("0.045000")
+        assert isinstance(result["cost"], Decimal), "cost must remain Decimal, not float"
+
+    def test_summarize_zero_prompt_tokens_hit_rate_zero(self):
+        """If total prompt_tokens == 0, cache_hit_rate is 0.0 (no ZeroDivisionError)."""
+        from decimal import Decimal
+
+        from anvil_kb.cli import summarize_enrich_usage
+
+        rows = [
+            self._make_row(prompt_tokens=0, cached_tokens=0, cost_cny=Decimal("0.000000")),
+        ]
+        result = summarize_enrich_usage(rows)
+        assert result["cache_hit_rate"] == 0.0
+
+    def test_summarize_empty_sequence_returns_zeros(self):
+        """Empty input → all fields zero."""
+        from decimal import Decimal
+
+        from anvil_kb.cli import summarize_enrich_usage
+
+        result = summarize_enrich_usage([])
+        assert result["calls"] == 0
+        assert result["prompt_tokens"] == 0
+        assert result["cached_tokens"] == 0
+        assert result["cache_hit_rate"] == 0.0
+        assert result["cost"] == Decimal("0")
+
+    def test_summarize_accepts_row_objects_with_attributes(self):
+        """summarize_enrich_usage must also accept objects with attribute access (ORM rows)."""
+        from decimal import Decimal
+
+        from anvil_kb.cli import summarize_enrich_usage
+
+        row = MagicMock()
+        row.prompt_tokens = 300
+        row.cached_tokens = 150
+        row.cost_cny = Decimal("0.030000")
+
+        result = summarize_enrich_usage([row])
+        assert result["calls"] == 1
+        assert result["prompt_tokens"] == 300
+        assert result["cache_hit_rate"] == pytest.approx(150 / 300)
+        assert result["cost"] == Decimal("0.030000")
+
+
+# ---------------------------------------------------------------------------
+# --enrich print-line format tests  (C2)
+# ---------------------------------------------------------------------------
+
+
+class TestEnrichPrintLine:
+    """After --enrich run, output must contain the cost summary line."""
+
+    @pytest.mark.asyncio
+    async def test_ingest_enrich_prints_cost_line(self, tmp_path, capsys):
+        """--enrich=True → output contains enrich cost summary line."""
+        from decimal import Decimal
+
+        from anvil_kb.cli import _run_ingest_command
+
+        md_file = tmp_path / "doc.md"
+        md_file.write_text("# Test\n\nContent.", encoding="utf-8")
+
+        fake_embedder = MagicMock()
+        fake_session_factory = MagicMock()
+        mock_ingest = AsyncMock(return_value=(MagicMock(), 1))
+
+        fake_row = MagicMock()
+        fake_row.prompt_tokens = 200
+        fake_row.cached_tokens = 50
+        fake_row.cost_cny = Decimal("0.020000")
+
+        mock_query_usage = MagicMock(return_value=[fake_row])
+
+        with (
+            patch("anvil_kb.store.pg.PgVectorStore", return_value=MagicMock()),
+            patch("anvil_kb.store.bm25.PgBM25Index", return_value=MagicMock()),
+            patch("anvil_kb.ingest.pipeline.ingest_markdown", mock_ingest),
+            patch("anvil_gateway.chat", MagicMock(), create=True),
+            patch("anvil_kb.cli._make_gateway_session_factory", return_value=MagicMock()),
+            patch("anvil_kb.cli._query_enrich_usage", mock_query_usage),
+        ):
+            await _run_ingest_command(
+                [str(md_file)], fake_embedder, fake_session_factory, enrich=True
+            )
+
+        captured = capsys.readouterr()
+        assert "enrich:" in captured.out
+        assert "calls" in captured.out
+        assert "prompt tokens" in captured.out
+        assert "cache hit" in captured.out
+        assert "cost ¥" in captured.out
+
+    @pytest.mark.asyncio
+    async def test_ingest_no_enrich_no_cost_line(self, tmp_path, capsys):
+        """Default (no --enrich) → cost summary line must NOT appear."""
+        from anvil_kb.cli import _run_ingest_command
+
+        md_file = tmp_path / "doc.md"
+        md_file.write_text("# Test\n\nContent.", encoding="utf-8")
+
+        fake_embedder = MagicMock()
+        fake_session_factory = MagicMock()
+        mock_ingest = AsyncMock(return_value=(MagicMock(), 1))
+
+        with (
+            patch("anvil_kb.store.pg.PgVectorStore", return_value=MagicMock()),
+            patch("anvil_kb.store.bm25.PgBM25Index", return_value=MagicMock()),
+            patch("anvil_kb.ingest.pipeline.ingest_markdown", mock_ingest),
+        ):
+            await _run_ingest_command(
+                [str(md_file)], fake_embedder, fake_session_factory, enrich=False
+            )
+
+        captured = capsys.readouterr()
+        assert "enrich:" not in captured.out
