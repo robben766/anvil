@@ -99,10 +99,11 @@ export default function ChatPanel({ onCite }: Props) {
         },
         onStreamEnd(receivedDone) {
           // 断流兜底: 流自然结束但未收到 done 事件 → 标记为意外中断
+          // 仅在该轮无既有 error 时设置,避免覆盖 error 帧带来的真实错误信息
           if (!receivedDone) {
             setTurns((prev) =>
               prev.map((t) =>
-                t.id === id && t.streaming
+                t.id === id && t.streaming && !t.error
                   ? { ...t, error: "流意外中断", streaming: false }
                   : t,
               ),
