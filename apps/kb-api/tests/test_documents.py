@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pathlib
+
 import httpx
 import pytest
 
@@ -184,3 +186,77 @@ async def test_reupload_same_filename_replaces(api_client: httpx.AsyncClient):
     docs = r_list.json()
     assert len(docs) == 1
     assert docs[0]["id"] == id2
+
+
+# ---------------------------------------------------------------------------
+# PDF upload  (D3)
+# ---------------------------------------------------------------------------
+
+_GOLDEN_PDF_DIR = (
+    pathlib.Path(__file__).parent.parent.parent.parent
+    / "packages" / "kb" / "golden" / "pdf"
+)
+_CLAUSE_PDF = _GOLDEN_PDF_DIR / "01-安康保障计划条款.pdf"
+
+
+@pytest.mark.asyncio
+async def test_upload_pdf_fixture_returns_201_with_chunks(api_client: httpx.AsyncClient):
+    """Uploading the golden 条款 PDF → 201, chunk_count > 0."""
+    assert _CLAUSE_PDF.exists(), f"fixture not found: {_CLAUSE_PDF}"
+    pdf_bytes = _CLAUSE_PDF.read_bytes()
+    response = await api_client.post(
+        "/v1/kb/documents",
+        files={"file": ("条款.pdf", pdf_bytes, "application/pdf")},
+    )
+    assert response.status_code == 201, response.text
+    data = response.json()
+    assert data["chunk_count"] > 0
+
+
+@pytest.mark.asyncio
+async def test_upload_pdf_content_is_markdown(api_client: httpx.AsyncClient):
+    """Stored document.content for a PDF upload is markdown (contains '## ').
+
+    The page-header text '星辉人寿保险股份有限公司' must have been stripped
+    by the header-dedup logic.
+    """
+    assert _CLAUSE_PDF.exists(), f"fixture not found: {_CLAUSE_PDF}"
+    pdf_bytes = _CLAUSE_PDF.read_bytes()
+    r_up = await api_client.post(
+        "/v1/kb/documents",
+        files={"file": ("条款.pdf", pdf_bytes, "application/pdf")},
+    )
+    assert r_up.status_code == 201, r_up.text
+    doc_id = r_up.json()["id"]
+
+    r_get = await api_client.get(f"/v1/kb/documents/{doc_id}")
+    assert r_get.status_code == 200
+    content = r_get.json()["content"]
+
+    assert "## " in content, "content must contain markdown section headings"
+    assert "星辉人寿保险股份有限公司" not in content, (
+        "page-header text must be stripped by the parser"
+    )
+
+
+@pytest.mark.asyncio
+async def test_upload_bad_pdf_bytes_returns_400(api_client: httpx.AsyncClient):
+    """Random bytes with .pdf extension → 400 with 'not a valid PDF' in detail."""
+    random_bytes = b"\x00\x01\x02\x03garbage bytes not a pdf"
+    response = await api_client.post(
+        "/v1/kb/documents",
+        files={"file": ("bad.pdf", random_bytes, "application/pdf")},
+    )
+    assert response.status_code == 400, response.text
+    assert "not a valid pdf" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_upload_pdf_over_2mb_returns_413(api_client: httpx.AsyncClient):
+    """PDF file exceeding 2MB size limit → 413 regardless of content."""
+    oversized = b"%PDF-1.4 " + b"x" * (2 * 1024 * 1024 + 1)
+    response = await api_client.post(
+        "/v1/kb/documents",
+        files={"file": ("huge.pdf", oversized, "application/pdf")},
+    )
+    assert response.status_code == 413, response.text

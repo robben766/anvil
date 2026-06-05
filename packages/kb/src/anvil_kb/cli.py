@@ -50,6 +50,7 @@ def _make_components():
 
 
 async def _run_ingest_command(files: list[str], embedder, session_factory) -> None:
+    from anvil_kb.ingest.pdf import parse_pdf
     from anvil_kb.ingest.pipeline import ingest_markdown
     from anvil_kb.store.bm25 import PgBM25Index
     from anvil_kb.store.pg import PgVectorStore
@@ -64,7 +65,11 @@ async def _run_ingest_command(files: list[str], embedder, session_factory) -> No
             source_name = str(path.relative_to(cwd))
         except ValueError:
             source_name = str(path)
-        text = path.read_text(encoding="utf-8")
+        if path.suffix.lower() == ".pdf":
+            raw = path.read_bytes()
+            text = parse_pdf(raw)
+        else:
+            text = path.read_text(encoding="utf-8")
         doc, n_chunks = await ingest_markdown(
             title=title,
             source_name=source_name,
