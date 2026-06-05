@@ -1,5 +1,5 @@
 services:
-  postgres:
+  postgres:           # 原样保留(langfuse 元数据库)
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
@@ -9,20 +9,7 @@ services:
     volumes:
       - ./data/pg:/var/lib/postgresql/data
 
-  langfuse:
-    image: langfuse/langfuse:2
-    restart: unless-stopped
-    depends_on: [postgres]
-    ports: ["3100:3000"]
-    environment:
-      DATABASE_URL: postgresql://langfuse:langfuse@postgres:5432/langfuse
-      NEXTAUTH_URL: http://localhost:3100
-      # 以下两项为本地开发占位值,暴露到任何网络前必须更换
-      NEXTAUTH_SECRET: local-dev-secret-change-me
-      SALT: local-dev-salt-change-me
-      TELEMETRY_ENABLED: "false"
-
-  anvil-postgres:
+  anvil-postgres:     # 原样保留
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
@@ -32,3 +19,64 @@ services:
     ports: ["5434:5432"]
     volumes:
       - ./data/anvil-pg:/var/lib/postgresql/data
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8-alpine
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_DB: langfuse
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: clickhouse
+    volumes:
+      - ./data/clickhouse:/var/lib/clickhouse
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "langfuse"]
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    entrypoint: sh
+    command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" /data'
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: miniosecret
+    volumes:
+      - ./data/minio:/data
+
+  langfuse-worker:
+    image: langfuse/langfuse-worker:3
+    restart: unless-stopped
+    depends_on: [postgres, clickhouse, redis, minio]
+    environment: &langfuse-env
+      DATABASE_URL: postgresql://langfuse:langfuse@postgres:5432/langfuse
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: clickhouse
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      REDIS_HOST: redis
+      REDIS_AUTH: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minio
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: miniosecret
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      NEXTAUTH_URL: http://localhost:3100
+      # 本地开发占位值,暴露到任何网络前必须更换
+      NEXTAUTH_SECRET: local-dev-secret-change-me
+      SALT: local-dev-salt-change-me
+      ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
+      TELEMETRY_ENABLED: "false"
+
+  langfuse:
+    image: langfuse/langfuse:3
+    restart: unless-stopped
+    depends_on: [langfuse-worker]
+    ports: ["3100:3000"]
+    environment: *langfuse-env
