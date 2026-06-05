@@ -99,11 +99,12 @@ export default function DocumentPanel() {
         <input
           ref={fileRef}
           type="file"
-          accept=".md,.txt"
+          accept=".md,.txt,.pdf"
           disabled={uploading}
           onChange={handleUpload}
           className="text-sm text-slate-600 file:mr-2 file:cursor-pointer file:rounded file:border file:border-slate-300 file:bg-white file:px-2 file:py-1 file:text-xs file:text-slate-700 disabled:opacity-50"
         />
+        <p className="text-xs text-slate-400">支持 .md、.txt、.pdf 格式，最大 2 MB</p>
         {uploading && (
           <p className="text-xs text-slate-500">上传中…</p>
         )}

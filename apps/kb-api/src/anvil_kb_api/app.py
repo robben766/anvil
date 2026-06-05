@@ -31,13 +31,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from anvil_kb.db import ChunkRow, DocumentRow, make_engine
 from anvil_kb.embed import Embedder, FastEmbedEmbedder
 from anvil_kb.generate import answer, answer_stream
+from anvil_kb.ingest.pdf import parse_pdf
 from anvil_kb.ingest.pipeline import ingest_markdown
 from anvil_kb.retrieve.retriever import Retriever
 from anvil_kb.store.base import ScoredChunk
 from anvil_kb.store.bm25 import PgBM25Index
 from anvil_kb.store.pg import PgVectorStore
 
-_ALLOWED_EXTENSIONS = {".md", ".txt"}
+_ALLOWED_EXTENSIONS = {".md", ".txt", ".pdf"}
 
 # H4: maximum upload size (2 MB)
 MAX_UPLOAD_BYTES = 2 * 1024 * 1024
@@ -303,7 +304,7 @@ def create_app(
         if suffix not in _ALLOWED_EXTENSIONS:
             raise HTTPException(
                 status_code=400,
-                detail=f"unsupported file type '{suffix}'; allowed: .md, .txt",
+                detail=f"unsupported file type '{suffix}'; allowed: .md, .txt, .pdf",
             )
 
         raw = await file.read()
@@ -318,13 +319,23 @@ def create_app(
                 ),
             )
 
-        try:
-            text = raw.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise HTTPException(
-                status_code=400,
-                detail=f"file content is not valid UTF-8: {exc}",
-            ) from exc
+        if suffix == ".pdf":
+            # PDF branch: parse binary bytes → markdown text (no UTF-8 decode)
+            try:
+                text = parse_pdf(raw)
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=str(exc),
+                ) from exc
+        else:
+            try:
+                text = raw.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"file content is not valid UTF-8: {exc}",
+                ) from exc
 
         stem = filename.rsplit(".", 1)[0] if "." in filename else filename
 

@@ -41,16 +41,20 @@ pnpm dev
 
 ## 上传语料
 
-通过产品 API 路径上传（与前端同路径）：
+通过产品 API 路径上传（与前端同路径），支持 .md、.txt、.pdf 格式：
 
 ```bash
+# 上传 .md 语料（三篇）
 for f in packages/kb/golden/corpus/*.md; do
   curl -s -F "file=@$f" http://localhost:8400/v1/kb/documents
   echo
 done
+
+# 或上传 .pdf 语料（PDF fixture，含页眉/页脚/表格版面陷阱）
+curl -F "file=@packages/kb/golden/pdf/01-安康保障计划条款.pdf" http://localhost:8400/v1/kb/documents
 ```
 
-三篇文档各返回 `201`，chunk_count 分别为 12 / 8 / 9。
+三篇 .md 文档各返回 `201`，chunk_count 分别为 12 / 8 / 9；.pdf 返回 chunk_count=10（手工 PDF 解析器）。
 
 ---
 
@@ -184,3 +188,67 @@ recall@5 两组均满分，不提高召回率（召回上限已由 hybrid 达到
 kb-16 原题"不想要这份保险了,刚买几天,钱能退吗?"，调试视图展示 dense / BM25 / RRF 融合 / Cross-Encoder 重排四列，可见 Cross-Encoder 将犹豫期相关 chunk 提至前两位。
 
 ![rerank debug view](screenshots/06-rerank-debug.png)
+
+---
+
+## PDF 解析损耗实验（KB-M4）
+
+将三篇 golden 语料的 PDF fixture（`packages/kb/golden/pdf/*.pdf`，含页眉/页脚/表格版面陷阱）替换 .md 直接灌入，在同一 golden 集（16 例，2 个拒答用例跳过，实际评分 14 例）上对比 hybrid 检索指标。
+
+### 汇总对比
+
+| corpus | recall@5 | precision@5 | MRR   | mean latency/query |
+|--------|----------|-------------|-------|--------------------|
+| .md 基线 | 1.000  | 0.200       | 0.881 | 131.2 ms           |
+| PDF 管线 | 1.000  | 0.200       | 0.893 | 133.3 ms           |
+
+**recall@5 两条管线均满分，PDF 管线 MRR 反而微升 +0.012（+1.4%）**，整体零损耗。
+
+### 逐例对比（仅标注 MRR 有变化的用例）
+
+| case  | 问题                       | .md MRR | PDF MRR | 变化    |
+|-------|----------------------------|---------|---------|---------|
+| kb-01 | 等待期是多少天?            | 1.000   | 0.500   | -0.500  |
+| kb-07 | 犹豫期多少天?期内退保退多少? | 0.500 | 1.000   | +0.500  |
+| kb-16 | 不想要这份保险了,刚买几天,钱能退吗? | 0.333 | 0.500 | +0.167 |
+| 其余 11 例 | —                     | 均同    | 均同    | =       |
+
+### 掉分例归因：kb-01（MRR 1.000 → 0.500）
+
+**现象**：evidence `"本合同等待期为90天,自保险合同生效之日起计算。"` 仍在 top-5 中（recall=1.0），但从 #1 降至 #2。
+
+**根因**：PDF 解析将 `03-产品说明.pdf` 里的等待期摘要行——`"本产品等待期90天,期内因疾病引起的出险不受保障。"`——切出为独立 chunk。该 chunk 与问题"等待期是多少天"的语义接近度在 hybrid RRF 排序中与条款原文（`01-安康保障计划条款.pdf` 第4条）打平，tie-breaking 碰巧将摘要 chunk 排在 #1。
+
+注意：摘要 chunk 不含 evidence 的精确子串（"本合同等待期为90天"），因此 recall 依然计入条款 chunk，MRR 按 #2 计算为 0.5。这是一个**排序层面的 tie-break 问题**，而非解析丢字。
+
+**md 中为何不出现**：.md 语料里 `01-安康保障计划条款.md` 的等待期 chunk 包含比产品说明更长、更具体的条款文本，dense 向量得分稍高，RRF 融合后保持在 #1。PDF 解析后两文档的等待期 chunk 措辞差距被拉近（均为一句话），导致得分接近。
+
+### 提分例说明
+
+- **kb-07 +0.500**：PDF 解析将犹豫期两条 evidence（"本合同设有15天犹豫期" + "犹豫期内投保人申请退保的,本公司全额退还已交保险费"）保留在同一 chunk 内，hybrid 排序将其提至 #1（md 中该 chunk 在 #2）。
+- **kb-16 +0.167**：PDF 解析后犹豫期条款 chunk 语义更紧凑，与"刚买几天,钱能退吗"的 embedding 相似度微升，从 #3 升至 #2（MRR 0.333→0.500）。
+
+### 解读
+
+- **fixture 版面陷阱被解析器完全消化**：页眉（「星辉人寿」公司名）/ 页脚（页码）/ 多列表格（轻症给付比例表）全部正确剔除或转为 markdown，未发现因乱码、重复页眉、表格破坏而导致的 recall 下跌。
+- **零损耗成立，MRR 略有提升**：净效果是 +1.4% MRR，原因是 PDF chunking 碰巧把若干 evidence 对齐得更好（kb-07/16 提升超过 kb-01 下跌）。
+- **真实世界 PDF 会更难**：fixture 是用 reportlab 精心生成的规整 PDF，字体大小清晰分级、文字层完整；扫描件、双栏排版、手写批注、图片型 PDF 均不在当前 `parse_pdf` 的能力范围内，遇到这类情况损耗将显著。
+- **排序 tie-break 脆弱性**：kb-01 掉分揭示了一个设计点——当两个 chunk 得分接近时，当前实现以 Python list 顺序（源自 SQL 返回行序）打破平局；如需稳定性，可在 RRF 层加入文档优先级或 chunk 位置因子。
+
+### 截图：PDF 上传 + 引用面板
+
+提问"轻症疾病最多能赔几次?"，点击 [1] 引用，面板展示 PDF 解析后的 markdown（含轻症给付比例表格）并高亮引用段落。文档列表中可见 `01-安康保障计划条款`（.pdf）条目。
+
+![PDF citation panel](screenshots/07-pdf-citation.png)
+
+上传命令（与 .md 相同路径，API 按 suffix 路由）：
+
+```bash
+curl -F "file=@packages/kb/golden/pdf/01-安康保障计划条款.pdf" http://localhost:8400/v1/kb/documents
+# 返回 {"id":"...","title":"01-安康保障计划条款","source_name":"01-安康保障计划条款.pdf","chunk_count":10}
+```
+
+### 已知边界
+
+- **单页 PDF 底部正文可能被当页脚误删**：`parse_pdf` 的页脚检测阈值为 `top/height > 0.90`（底部 10% 区域），且对单页文档采用 `≥1` 次即剔除的策略（因为页码每页唯一，`≥2` 次去重永远不会触发）。因此，若 PDF 只有 1 页且正文文字落在页面底部 10% 区域，会被误判为页脚而静默丢弃。
+- **标题识别依赖字号差，bold-only/编号式标题会静默降级为正文**：`_classify_headings` 仅凭字号（`font_size > body_size + 1.5pt`）判断标题层级，不读取粗体（bold）标志。若 PDF 的标题仅以加粗而非更大字号区分（常见于纯 bold 样式或"一、二、三"编号体系），解析器不会将其识别为 `#`/`##`/`###`，而是将其当作普通正文输出。chunker 不会报错，但 `header_path` 字段会缺失，影响依赖标题路径做精细化检索的场景。

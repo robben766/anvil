@@ -131,3 +131,42 @@ def test_real_overlap_shares_line_content():
     assert chunks[0].content[-11:] == chunks[1].content[:11]
     for c in chunks:
         assert text[c.start_offset:c.end_offset] == c.content
+
+
+# ── 空白 chunk 过滤测试 (KB-D2 review) ────────────────────────────────────────
+
+def test_no_blank_chunks_from_consecutive_blank_lines():
+    """含连续空行的 markdown 不应产生 content.strip()=='' 的 chunk。
+
+    场景：两个节之间有连续空行，chunker 必须将全空白内容过滤掉，
+    不输出空 chunk。
+    """
+    # Consecutive blank lines between sections
+    text = "# 第一节\n\n\n\n内容行A。\n\n\n# 第二节\n\n\n内容行B。\n"
+    chunks = chunk_markdown(text, size=600, overlap=100)
+    for c in chunks:
+        assert c.content.strip() != "", (
+            f"Blank chunk found: repr={c.content!r}, seq={c.seq}"
+        )
+
+
+def test_seq_continuous_after_blank_filter():
+    """空白 chunk 过滤后 seq 必须仍是从 0 开始的连续整数序列。"""
+    # Multiple blank lines that could otherwise produce blank chunks
+    text = "# A\n\n\n\n行1。\n\n\n# B\n\n\n行2。\n"
+    chunks = chunk_markdown(text, size=600, overlap=100)
+    assert len(chunks) > 0
+    assert [c.seq for c in chunks] == list(range(len(chunks))), (
+        f"seq not contiguous after blank filter: {[c.seq for c in chunks]}"
+    )
+
+
+def test_blank_only_section_produces_no_chunk():
+    """仅含空行的 section（无实际文本）不产生任何 chunk。"""
+    # Section body is entirely blank lines
+    text = "# 空节\n\n\n\n# 有内容节\n内容行。\n"
+    chunks = chunk_markdown(text, size=600, overlap=100)
+    # Must have exactly 1 chunk (the content line), none for the blank section
+    assert len(chunks) == 1
+    assert "内容行。" in chunks[0].content
+    assert chunks[0].seq == 0
