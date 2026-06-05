@@ -58,15 +58,17 @@ class ChunkRow(Base):
     )
 
 
-_DEFAULT_DB_URL = "postgresql+asyncpg://anvil:anvil@localhost:5432/anvil"
-
-
 def make_engine(database_url: str | None = None) -> AsyncEngine:
     """Create an async engine with NullPool (mirrors ledger.py pattern).
 
-    Priority: explicit argument > ANVIL_DATABASE_URL env var > built-in default.
+    Priority: explicit argument > ANVIL_DATABASE_URL env var.
+    Raises ValueError if neither is provided.
     """
-    url = database_url or os.environ.get("ANVIL_DATABASE_URL", _DEFAULT_DB_URL)
+    url = database_url or os.environ.get("ANVIL_DATABASE_URL")
+    if url is None:
+        raise ValueError(
+            "database url required: pass explicitly or set ANVIL_DATABASE_URL"
+        )
     return create_async_engine(url, poolclass=NullPool)
 
 

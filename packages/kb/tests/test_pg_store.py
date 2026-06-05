@@ -40,3 +40,7 @@ async def test_delete_document_removes_chunks(kb_store):
     await kb_store.upsert_chunks(doc, [_chunk(doc, 0, _vec(0))])
     await kb_store.delete_document(doc.id)
     assert await kb_store.search(_vec(0), k=5) == []
+
+
+async def test_delete_document_nonexistent_is_silent(kb_store):
+    await kb_store.delete_document(uuid.uuid4())  # 不应抛出

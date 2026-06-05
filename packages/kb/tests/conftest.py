@@ -5,11 +5,10 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from anvil_kb.db import make_session_factory
+from anvil_kb.db import make_engine
 from anvil_kb.store.pg import PgVectorStore
 
 TEST_DB_URL = os.environ.get(
@@ -50,7 +49,7 @@ async def kb_session(_run_kb_migrations):
     await _truncate_kb_tables(TEST_DB_URL)
 
     engine = create_async_engine(TEST_DB_URL, echo=False, poolclass=NullPool)
-    async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
     async with async_session() as session:
         yield session
@@ -66,8 +65,10 @@ async def kb_store(_run_kb_migrations):
     """Provide a PgVectorStore backed by the test database; tables are truncated before/after."""
     await _truncate_kb_tables(TEST_DB_URL)
 
-    session_factory = make_session_factory(TEST_DB_URL)
+    engine = make_engine(TEST_DB_URL)
+    session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     store = PgVectorStore(session_factory)
     yield store
 
+    await engine.dispose()
     await _truncate_kb_tables(TEST_DB_URL)
