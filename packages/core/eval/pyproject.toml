@@ -20,6 +20,9 @@ dev = [
     "ruff>=0.6",
 ]
 
+[project.scripts]
+anvil-eval = "anvil_eval.cli:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
