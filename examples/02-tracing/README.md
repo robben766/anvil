@@ -19,6 +19,6 @@ uv run python examples/02-tracing/main.py
 调用树结构:`task 模型网关`(根)→ `gateway.chat deepseek-chat`(两个)→ `chat deepseek-chat`(子 span),每个 `chat` span 携带属性:
 
 - `gen_ai.usage.input_tokens` / `gen_ai.usage.output_tokens`
-- `anvil.cached_tokens` / `anvil.cache_hit_rate`
-- `anvil.cost_cny`
+- `anvil.usage.cached_tokens` / `anvil.usage.cache_hit_rate`
+- `anvil.usage.cost_cny`
 - `anvil.session_id`
