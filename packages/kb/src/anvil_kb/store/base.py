@@ -23,6 +23,7 @@ class Chunk:
     start_offset: int
     end_offset: int
     embedding: list[float] | None = None
+    context_prefix: str = ""
 
 
 @dataclass

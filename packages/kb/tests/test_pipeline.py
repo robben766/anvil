@@ -284,3 +284,222 @@ async def test_sparse_index_called_after_vector_store(kb_store):
     assert call_log == ["upsert", "index"], (
         f"Expected ['upsert', 'index'], got {call_log}"
     )
+
+
+# ── Contextual Retrieval enrichment tests ─────────────────────────────────────
+
+
+def _make_enrich_chat(responses: list[str]):
+    """Build a fake chat returning given responses in order."""
+    from types import SimpleNamespace
+
+    idx = 0
+    calls: list[dict] = []
+
+    async def fake_chat(model: str, messages: list[dict], **kw):
+        nonlocal idx
+        calls.append({"model": model, "messages": messages, **kw})
+        resp = responses[idx] if idx < len(responses) else ""
+        idx += 1
+        return SimpleNamespace(content=resp)
+
+    fake_chat.calls = calls  # type: ignore[attr-defined]
+    return fake_chat
+
+
+async def test_enrich_chat_sets_context_prefix(kb_store):
+    """enrich_chat 非 None → Chunk.context_prefix 按 enrich_chunks 返回值设置。"""
+    from anvil_kb.ingest.pipeline import ingest_markdown
+
+    drafts_expected = chunk_markdown(TWO_SECTION_MD, size=600, overlap=100)
+    fake_responses = [f"定位上下文_{i}" for i in range(len(drafts_expected))]
+    enrich_chat = _make_enrich_chat(fake_responses)
+
+    embedder = FakeEmbedder()
+    # Capture chunks via FakeSparseIndex
+    sparse = FakeSparseIndex()
+
+    await ingest_markdown(
+        title="富集测试",
+        source_name="test/enrich-prefix",
+        text=TWO_SECTION_MD,
+        embedder=embedder,
+        store=kb_store,
+        sparse_index=sparse,
+        enrich_chat=enrich_chat,
+    )
+
+    assert sparse.received_chunks is not None
+    for i, chunk in enumerate(sparse.received_chunks):
+        assert chunk.context_prefix == fake_responses[i], (
+            f"chunk[{i}].context_prefix mismatch"
+        )
+
+
+async def test_enrich_chat_embedding_input_uses_prefix(kb_store):
+    """embedding 输入 = prefix + '\\n' + content(逐条验证)。"""
+    from anvil_kb.ingest.pipeline import ingest_markdown
+
+    drafts_expected = chunk_markdown(TWO_SECTION_MD, size=600, overlap=100)
+    fake_responses = [f"前缀_{i}" for i in range(len(drafts_expected))]
+    enrich_chat = _make_enrich_chat(fake_responses)
+
+    captured_inputs: list[list[str]] = []
+
+    class CapturingEmbedder:
+        call_count = 0
+
+        @property
+        def dim(self) -> int:
+            return 512
+
+        def embed_texts(self, texts: list[str]) -> list[list[float]]:
+            self.call_count += 1
+            captured_inputs.append(list(texts))
+            return [_vec(i) for i in range(len(texts))]
+
+        def embed_query(self, text: str) -> list[float]:
+            return _vec(0)
+
+    embedder = CapturingEmbedder()
+    sparse = FakeSparseIndex()
+
+    await ingest_markdown(
+        title="嵌入输入测试",
+        source_name="test/embed-input",
+        text=TWO_SECTION_MD,
+        embedder=embedder,
+        store=kb_store,
+        sparse_index=sparse,
+        enrich_chat=enrich_chat,
+    )
+
+    assert len(captured_inputs) == 1  # single batch call
+    inputs = captured_inputs[0]
+    for i, draft in enumerate(drafts_expected):
+        expected_input = f"前缀_{i}\n{draft.content}"
+        assert inputs[i] == expected_input, (
+            f"embed input[{i}] expected {expected_input!r}, got {inputs[i]!r}"
+        )
+
+
+async def test_enrich_chat_none_prefix_empty_no_behavior_change(kb_store):
+    """enrich_chat=None → context_prefix 全 ''，embedding 输入 == content(零行为变化)。"""
+    from anvil_kb.ingest.pipeline import ingest_markdown
+
+    drafts_expected = chunk_markdown(TWO_SECTION_MD, size=600, overlap=100)
+    captured_inputs: list[list[str]] = []
+
+    class CapturingEmbedder:
+        @property
+        def dim(self) -> int:
+            return 512
+
+        def embed_texts(self, texts: list[str]) -> list[list[float]]:
+            captured_inputs.append(list(texts))
+            return [_vec(i) for i in range(len(texts))]
+
+        def embed_query(self, text: str) -> list[float]:
+            return _vec(0)
+
+    sparse = FakeSparseIndex()
+
+    await ingest_markdown(
+        title="无富集测试",
+        source_name="test/no-enrich",
+        text=TWO_SECTION_MD,
+        embedder=CapturingEmbedder(),
+        store=kb_store,
+        sparse_index=sparse,
+        enrich_chat=None,
+    )
+
+    # Embedding inputs must equal content exactly
+    inputs = captured_inputs[0]
+    for i, draft in enumerate(drafts_expected):
+        assert inputs[i] == draft.content, (
+            f"Without enrich, embed input[{i}] should equal content"
+        )
+
+    # All context_prefix must be ""
+    assert sparse.received_chunks is not None
+    for chunk in sparse.received_chunks:
+        assert chunk.context_prefix == "", "enrich_chat=None → context_prefix must be ''"
+
+
+async def test_enrich_chat_fail_open_does_not_fail_ingest(kb_store):
+    """富集失败(enrich_chat 抛异常)不许让 ingest 失败;prefix 降级为 ''。"""
+    from types import SimpleNamespace
+
+    from anvil_kb.ingest.pipeline import ingest_markdown
+
+    call_count = 0
+
+    async def sometimes_failing_chat(model, messages, **kw):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise RuntimeError("模拟富集失败")
+        return SimpleNamespace(content=f"ctx_{call_count}")
+
+    sparse = FakeSparseIndex()
+
+    # Must not raise
+    doc, n = await ingest_markdown(
+        title="fail-open 测试",
+        source_name="test/fail-open",
+        text=TWO_SECTION_MD,
+        embedder=FakeEmbedder(),
+        store=kb_store,
+        sparse_index=sparse,
+        enrich_chat=sometimes_failing_chat,
+    )
+    assert n > 0
+
+    # First chunk's context_prefix should be "" (failed), rest should have values
+    assert sparse.received_chunks is not None
+    assert sparse.received_chunks[0].context_prefix == ""
+
+
+async def test_citation_fields_unchanged_after_enrich(kb_store):
+    """富集后 start_offset/end_offset/content 与未富集一致(引用高亮硬约束)。"""
+    from anvil_kb.ingest.pipeline import ingest_markdown
+
+    drafts_expected = chunk_markdown(TWO_SECTION_MD, size=600, overlap=100)
+    n = len(drafts_expected)
+    fake_responses = [f"ctx_{i}" for i in range(n)]
+    enrich_chat = _make_enrich_chat(fake_responses)
+
+    sparse_with = FakeSparseIndex()
+    sparse_without = FakeSparseIndex()
+
+    await ingest_markdown(
+        title="富集对比-有",
+        source_name="test/cite-with-enrich",
+        text=TWO_SECTION_MD,
+        embedder=FakeEmbedder(),
+        store=kb_store,
+        sparse_index=sparse_with,
+        enrich_chat=enrich_chat,
+    )
+
+    await ingest_markdown(
+        title="富集对比-无",
+        source_name="test/cite-without-enrich",
+        text=TWO_SECTION_MD,
+        embedder=FakeEmbedder(),
+        store=kb_store,
+        sparse_index=sparse_without,
+        enrich_chat=None,
+    )
+
+    assert sparse_with.received_chunks is not None
+    assert sparse_without.received_chunks is not None
+
+    chunks_with = sorted(sparse_with.received_chunks, key=lambda c: c.seq)
+    chunks_without = sorted(sparse_without.received_chunks, key=lambda c: c.seq)
+
+    for cw, cno in zip(chunks_with, chunks_without, strict=True):
+        assert cw.content == cno.content, f"seq={cw.seq}: content changed after enrich"
+        assert cw.start_offset == cno.start_offset, f"seq={cw.seq}: start_offset changed"
+        assert cw.end_offset == cno.end_offset, f"seq={cw.seq}: end_offset changed"

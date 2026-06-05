@@ -47,6 +47,7 @@ class PgVectorStore:
                             start_offset=chunk.start_offset,
                             end_offset=chunk.end_offset,
                             embedding=chunk.embedding,
+                            context_prefix=chunk.context_prefix,
                         )
                     )
 
@@ -62,6 +63,7 @@ class PgVectorStore:
                     ChunkRow.header_path,
                     ChunkRow.start_offset,
                     ChunkRow.end_offset,
+                    ChunkRow.context_prefix,
                     ChunkRow.embedding.cosine_distance(query_vector).label("distance"),
                 )
                 .order_by("distance")
@@ -80,6 +82,7 @@ class PgVectorStore:
                     start_offset=row.start_offset,
                     end_offset=row.end_offset,
                     embedding=None,  # 省流量,不带回 embedding
+                    context_prefix=row.context_prefix,
                 ),
                 score=1.0 - float(row.distance),
             )

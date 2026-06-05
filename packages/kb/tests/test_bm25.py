@@ -581,3 +581,91 @@ async def test_empty_db_returns_empty(bm25_store: PgBM25Index) -> None:
     """空库(N=0)→ search 返回 []。"""
     results = await bm25_store.search("apple", k=5)
     assert results == []
+
+
+@pytest.mark.asyncio
+async def test_context_prefix_words_searchable(bm25_store: PgBM25Index) -> None:
+    """context_prefix 含独特词 'XQZW定位词' → search 该词命中该 chunk(真 PG)。
+
+    index_chunks 在 prefix 非空时拼接 prefix + '\\n' + content 再分词,
+    前缀词应进入倒排索引。
+    """
+    from sqlalchemy import text as sqla_text
+    from sqlalchemy.ext.asyncio import create_async_engine as _cae
+
+    from anvil_kb.db import EMBEDDING_DIM
+
+    prefix_chunk_id = uuid.UUID("eeeeeeee-0000-0000-0000-000000000001")
+    other_chunk_id = uuid.UUID("ffffffff-0000-0000-0000-000000000001")
+    doc_id = uuid.UUID("11111111-0000-0000-0000-000000000001")
+    unique_term = "XQZW定位词"
+
+    prefix_chunk = Chunk(
+        id=prefix_chunk_id,
+        document_id=doc_id,
+        seq=0,
+        content="这是一段关于保险条款的普通内容",
+        header_path="",
+        start_offset=0,
+        end_offset=20,
+        embedding=None,
+        context_prefix=f"本段在文档中描述了{unique_term}相关的核心概念",
+    )
+    other_chunk = Chunk(
+        id=other_chunk_id,
+        document_id=doc_id,
+        seq=1,
+        content="另一段完全不同的内容，不含特殊词汇",
+        header_path="",
+        start_offset=20,
+        end_offset=40,
+        embedding=None,
+        context_prefix="",
+    )
+
+    # Insert rows into DB (required before index_chunks)
+    ins_engine = _cae(TEST_DB_URL, poolclass=NullPool)
+    async with ins_engine.begin() as conn:
+        await conn.execute(
+            sqla_text(
+                "INSERT INTO kb_documents(id, title, source_name, content) "
+                "VALUES (:id, :title, :sn, :content) ON CONFLICT DO NOTHING"
+            ),
+            {
+                "id": str(doc_id),
+                "title": "prefix test doc",
+                "sn": "prefix_test_src",
+                "content": "x",
+            },
+        )
+        zero_emb = [0.0] * EMBEDDING_DIM
+        for c in [prefix_chunk, other_chunk]:
+            await conn.execute(
+                sqla_text(
+                    "INSERT INTO kb_chunks(id, document_id, seq, content, header_path, "
+                    "start_offset, end_offset, embedding, token_count, context_prefix) "
+                    "VALUES (:id, :doc_id, :seq, :content, :hp, :so, :eo, :emb, 0, :ctx) "
+                    "ON CONFLICT DO NOTHING"
+                ),
+                {
+                    "id": str(c.id),
+                    "doc_id": str(c.document_id),
+                    "seq": c.seq,
+                    "content": c.content,
+                    "hp": c.header_path,
+                    "so": c.start_offset,
+                    "eo": c.end_offset,
+                    "emb": str(zero_emb),
+                    "ctx": c.context_prefix,
+                },
+            )
+    await ins_engine.dispose()
+
+    await bm25_store.index_chunks([prefix_chunk, other_chunk])
+
+    # Search the unique term from the prefix — should hit prefix_chunk only
+    results = await bm25_store.search(unique_term, k=5)
+    assert len(results) > 0, f"search({unique_term!r}) 应命中前缀词所在的 chunk"
+    assert results[0].chunk.id == prefix_chunk_id, (
+        f"应命中 prefix_chunk({prefix_chunk_id}),实际得 {results[0].chunk.id}"
+    )

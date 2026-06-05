@@ -54,6 +54,7 @@ class ChunkRow(Base):
     end_offset: Mapped[int] = mapped_column(Integer, nullable=False)
     embedding: Mapped[list[float]] = mapped_column(Vector(EMBEDDING_DIM), nullable=False)
     token_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    context_prefix: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
