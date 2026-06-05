@@ -40,3 +40,10 @@ def test_missing_required_field_raises(tmp_path):
 def test_duplicate_id_raises(tmp_path):
     with pytest.raises(ValueError, match="duplicate"):
         load_dataset(_write(tmp_path, [VALID, VALID]))
+
+
+def test_invalid_json_reports_file_line(tmp_path):
+    p = tmp_path / "bad.jsonl"
+    p.write_text('{"id":"c1","question":"q","reference":"r"}\n{bad json}', encoding="utf-8")
+    with pytest.raises(ValueError, match="line 2"):
+        load_dataset(str(p))

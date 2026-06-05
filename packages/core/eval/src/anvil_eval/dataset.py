@@ -24,7 +24,10 @@ def load_dataset(path: str) -> list[GoldenCase]:
     for lineno, line in enumerate(Path(path).read_text(encoding="utf-8").splitlines(), 1):
         if not line.strip():
             continue
-        row = json.loads(line)
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"line {lineno}: invalid JSON - {e.msg}") from e
         for key in _REQUIRED:
             if not row.get(key):
                 raise ValueError(f"line {lineno}: missing required field {key!r}")
