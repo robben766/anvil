@@ -31,4 +31,5 @@ jobs:
       - run: uv sync --all-packages
       - run: uv run ruff check .
       - run: cd packages/core/gateway && uv run alembic upgrade head
+      - run: cd packages/kb && uv run alembic upgrade head
       - run: uv run pytest -m "not live" -q
