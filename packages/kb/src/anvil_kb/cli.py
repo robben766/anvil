@@ -51,9 +51,11 @@ def _make_components():
 
 async def _run_ingest_command(files: list[str], embedder, session_factory) -> None:
     from anvil_kb.ingest.pipeline import ingest_markdown
+    from anvil_kb.store.bm25 import PgBM25Index
     from anvil_kb.store.pg import PgVectorStore
 
     store = PgVectorStore(session_factory)
+    bm25 = PgBM25Index(session_factory)
     cwd = Path.cwd()
     for file_str in files:
         path = Path(file_str)
@@ -69,6 +71,7 @@ async def _run_ingest_command(files: list[str], embedder, session_factory) -> No
             text=text,
             embedder=embedder,
             store=store,
+            sparse_index=bm25,
         )
         print(f"ingested: {source_name!r}  title={title!r}  chunks={n_chunks}")
 
@@ -76,10 +79,12 @@ async def _run_ingest_command(files: list[str], embedder, session_factory) -> No
 async def _run_query_command(question: str, k: int, embedder, session_factory) -> None:
     from anvil_kb.generate import answer
     from anvil_kb.retrieve.retriever import Retriever
+    from anvil_kb.store.bm25 import PgBM25Index
     from anvil_kb.store.pg import PgVectorStore
 
     store = PgVectorStore(session_factory)
-    retriever = Retriever(embedder, store)
+    bm25 = PgBM25Index(session_factory)
+    retriever = Retriever(embedder, store, sparse_index=bm25, mode="hybrid")
     retrieved = await retriever.retrieve(question, k=k)
     kb_answer = await answer(question, retrieved)
     print(kb_answer.text)

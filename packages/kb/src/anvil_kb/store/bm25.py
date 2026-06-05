@@ -17,16 +17,12 @@ import math
 import re
 import uuid
 from collections import Counter
-from typing import TYPE_CHECKING
 
 from sqlalchemy import Float, delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from anvil_kb.db import ChunkRow, PostingRow
 from anvil_kb.store.base import Chunk, ScoredChunk
-
-if TYPE_CHECKING:
-    pass
 
 K1: float = 1.5
 B: float = 0.75
@@ -113,12 +109,15 @@ class PgBM25Index:
             return []
 
         async with self._session_factory() as session:
-            # ── 1. 全局统计:N(总 chunk 数) 和 avgdl(平均文档长度) ──────────
+            # ── 1. 全局统计:N 和 avgdl ────────────────────────────────────
+            # BM25 宇宙 = 已建倒排的 chunk 子集(token_count > 0)。
+            # dense-only chunk(token_count=0)不在 kb_postings 中,
+            # 若纳入统计会虚增 N 并拉低 avgdl,污染 IDF 和长度归一。
             stats_row = await session.execute(
                 select(
                     func.count(ChunkRow.id).label("n"),
                     func.avg(ChunkRow.token_count).cast(Float).label("avgdl"),
-                )
+                ).where(ChunkRow.token_count > 0)
             )
             stats = stats_row.one()
             n_total: int = stats.n

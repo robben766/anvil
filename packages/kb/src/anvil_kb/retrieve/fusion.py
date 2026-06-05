@@ -23,12 +23,8 @@ Chunk identity rule:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 from anvil_kb.store.base import ScoredChunk
-
-if TYPE_CHECKING:
-    pass
 
 
 @dataclass
