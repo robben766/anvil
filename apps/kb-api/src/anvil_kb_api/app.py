@@ -20,6 +20,7 @@ from typing import Any
 
 import uvicorn
 from fastapi import FastAPI, Header, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
@@ -143,6 +144,12 @@ def create_app(
     _retriever = retriever if retriever is not None else Retriever(embedder, store)
 
     app = FastAPI(title="anvil-kb-api", version="0.1.0")
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     # ------------------------------------------------------------------ #
     # POST /v1/kb/documents
