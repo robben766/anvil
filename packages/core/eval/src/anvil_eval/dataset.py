@@ -16,6 +16,8 @@ class GoldenCase:
     reference: str
     contexts: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
+    evidences: list[str] = field(default_factory=list)
+    answerable: bool = True
 
 
 def load_dataset(path: str) -> list[GoldenCase]:
@@ -41,6 +43,8 @@ def load_dataset(path: str) -> list[GoldenCase]:
                 reference=row["reference"],
                 contexts=row.get("contexts") or [],
                 tags=row.get("tags") or [],
+                evidences=row.get("evidences") or [],
+                answerable=row.get("answerable", True),
             )
         )
     return cases

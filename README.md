@@ -45,6 +45,15 @@ uv run uvicorn anvil_gateway.proxy.app:app --port 8400
 uv run pytest -m "not live" -q
 ```
 
+## 组件
+
+| 包 | 状态 | 一句话 |
+|----|------|--------|
+| anvil-gateway | M5 | 多 provider 统一调用 / fallback / 缓存计账 |
+| anvil-obs | M3 | 自研 OTEL span + Langfuse 导出 |
+| anvil-eval | M4 | 手写 RAGAS 四指标 + golden CI 门禁 |
+| anvil-kb | KB-M1a | hand-rolled RAG:chunker/pgvector/retriever/generate;CLI ingest/query/eval |
+
 ## 进度
 
 - [x] M1 骨架 + CI + Langfuse
@@ -52,3 +61,4 @@ uv run pytest -m "not live" -q
 - [x] M3 obs:自研 span + OTLP 导出 Langfuse v3,GenAI semconv → [examples/02-tracing](examples/02-tracing/)
 - [x] M4 eval:手写 RAGAS 四指标 + golden set CI 门禁 → `anvil-eval run --dataset packages/core/eval/golden/demo.jsonl`
 - [x] M5 proxy:OpenAI 兼容 HTTP proxy shell(非流式 + SSE),curl 实测 DeepSeek → [examples/03-proxy](examples/03-proxy/)
+- [x] KB-M1a 通用知识库核心:chunker / PgVectorStore / pipeline / Retriever / generate + CLI → `anvil-kb eval --dataset packages/kb/golden/kb.jsonl --corpus packages/kb/golden/corpus`

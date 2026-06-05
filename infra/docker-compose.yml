@@ -10,7 +10,7 @@ services:
       - ./data/pg:/var/lib/postgresql/data
 
   anvil-postgres:     # 原样保留
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     restart: unless-stopped
     environment:
       POSTGRES_USER: anvil
