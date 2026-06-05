@@ -24,6 +24,7 @@ from anvil_kb.store.base import ScoredChunk, SparseIndex, VectorStore
 
 if TYPE_CHECKING:
     from anvil_kb.embed import Embedder
+    from anvil_kb.retrieve.rerank import Reranker
 
 
 class Retriever:
@@ -35,6 +36,10 @@ class Retriever:
         sparse_index:  BM25/sparse index.  Required for 'sparse' and 'hybrid'
                        modes; raises ValueError at construction time if absent.
         mode:          One of 'dense', 'sparse', 'hybrid' (default 'hybrid').
+        reranker:      Optional cross-encoder reranker.  When provided, the
+                       final top-k is produced by the reranker instead of the
+                       retrieval score; when None the behaviour is identical to
+                       KB-M2 (zero regression).
 
     Raises:
         ValueError: At construction time when mode in {'sparse','hybrid'} and
@@ -48,6 +53,7 @@ class Retriever:
         *,
         sparse_index: SparseIndex | None = None,
         mode: Literal["dense", "sparse", "hybrid"] = "hybrid",
+        reranker: Reranker | None = None,
     ) -> None:
         if mode in ("sparse", "hybrid") and sparse_index is None:
             raise ValueError(
@@ -57,21 +63,38 @@ class Retriever:
         self._vector_store = vector_store
         self._sparse_index = sparse_index
         self._mode = mode
+        self._reranker = reranker
 
     async def retrieve(self, question: str, k: int = 5) -> list[ScoredChunk]:
         """Return top-k chunks for *question* using the configured mode.
 
         hybrid path reuses a single internal search pass (no double retrieval).
+
+        Reranker semantics:
+          - reranker=None:  behaviour identical to KB-M2 (zero regression).
+          - reranker set:   candidate stage runs with k*4 to give the reranker a
+                            larger pool; the reranker then produces the final top-k.
+            dense/sparse:  k*4 candidates → reranker.rerank(question, candidates, top=k)
+            hybrid:        full RRF-fused list (all candidates, not truncated to k)
+                           → reranker.rerank(question, candidates, top=k)
         """
         if self._mode == "dense":
+            if self._reranker is not None:
+                candidates = await self._dense_search(question, k * 4)
+                return self._reranker.rerank(question, candidates, top=k)
             return await self._dense_search(question, k)
 
         if self._mode == "sparse":
             assert self._sparse_index is not None  # guaranteed by __init__
+            if self._reranker is not None:
+                candidates = await self._sparse_index.search(question, k * 4)
+                return self._reranker.rerank(question, candidates, top=k)
             return await self._sparse_index.search(question, k)
 
-        # hybrid — run once, fuse, return top-k
+        # hybrid — run once, fuse, return top-k (or reranked top-k)
         debug = await self._hybrid_debug(question, k)
+        if self._reranker is not None:
+            return debug.reranked or []
         return debug.fused
 
     async def retrieve_debug(self, question: str, k: int = 5) -> RetrievalDebug:
@@ -82,6 +105,10 @@ class Retriever:
         ``self._mode``.  Because sparse search is always required, a
         ``sparse_index`` must have been provided at construction time even when
         the production mode is ``'dense'``.
+
+        The ``reranked`` field in the returned ``RetrievalDebug`` is populated
+        when a reranker is configured (None otherwise).  The ``fused`` field
+        always reflects the pre-rerank RRF order for comparison.
 
         Raises:
             ValueError: If no ``sparse_index`` was provided (debug always needs
@@ -113,6 +140,14 @@ class Retriever:
         ranks in contributions are 1-based positions within those lists and may
         be larger than k.  This is an intentional single-pass trade-off:
         contributions are always constructed (O(k*4)) even in non-debug callers.
+
+        Reranker handling:
+        - ``fused`` always holds the pre-rerank RRF top-k (truncated to k).
+        - When a reranker is configured, the *full* fused list (up to k*4
+          unique chunks after RRF) is passed to the reranker so it has a
+          larger pool to work with.  The reranker result is stored in
+          ``reranked``; ``fused`` is unchanged (pre-rerank view).
+        - When no reranker is configured, ``reranked`` is None.
         """
         # _sparse_index is guaranteed non-None by the callers' guards above
         assert self._sparse_index is not None
@@ -125,7 +160,10 @@ class Retriever:
         sparse_candidates = await self._sparse_index.search(question, candidates)
 
         # ── 2. Fuse with RRF ─────────────────────────────────────────────────
-        fused = rrf_fuse([dense_candidates, sparse_candidates], k=60, top=k)
+        # full_fused: all unique chunks after fusion (up to k*4), unsorted by k
+        # fused_top_k: truncated to k, used as the pre-rerank "fused" view
+        full_fused = rrf_fuse([dense_candidates, sparse_candidates], k=60, top=candidates)
+        fused_top_k = full_fused[:k]
 
         # ── 3. Build contributions map ───────────────────────────────────────
         # contributions[chunk_id_str] = {'dense': rank | None, 'sparse': rank | None}
@@ -148,9 +186,17 @@ class Retriever:
             for cid in all_ids
         }
 
+        # ── 4. Optional reranking ────────────────────────────────────────────
+        # Pass the full fused list to the reranker so it has a larger pool.
+        # fused_top_k is NOT affected — it always reflects the pre-rerank order.
+        reranked: list[ScoredChunk] | None = None
+        if self._reranker is not None:
+            reranked = self._reranker.rerank(question, full_fused, top=k)
+
         return RetrievalDebug(
             dense=dense_candidates[:k],
             sparse=sparse_candidates[:k],
-            fused=fused,
+            fused=fused_top_k,
             contributions=contributions,
+            reranked=reranked,
         )
