@@ -81,4 +81,4 @@ hand-rolled RAG pipeline:chunker / fastembed / PgVectorStore(pgvector) / Retriev
 - `eval/` — Task + runner(worktree→agent→verify)+ pass 率;fixture: calc bug-fix
 - CLI: `anvil-code-agent solve --repo <r> --prompt "<p>"` / `anvil-code-agent eval --dataset <tasks.jsonl>`
 - 测试: `uv run pytest packages/code-agent -q`(工具/沙箱纯本地;loop/runner 走 respx mock + 测试 PG@5434);live 冒烟需 DEEPSEEK_API_KEY
-- 复用 gateway(tool_use 往返)/obs(span 追踪每步工具)/eval 基建
+- 复用 gateway(tool_use 往返)/obs(span 追踪每步工具);eval-pipeline 集成推迟到 M4(SWE-bench 基线)

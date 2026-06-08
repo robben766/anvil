@@ -6,7 +6,6 @@ requires-python = ">=3.12"
 dependencies = [
     "anvil-gateway",
     "anvil-obs",
-    "anvil-eval",
 ]
 
 [project.scripts]
@@ -24,7 +23,6 @@ dev = [
 [tool.uv.sources]
 anvil-gateway = { workspace = true }
 anvil-obs = { workspace = true }
-anvil-eval = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]
