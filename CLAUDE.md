@@ -18,7 +18,7 @@
 hand-rolled RAG pipeline:chunker / fastembed / PgVectorStore(pgvector) / Retriever / generate(anvil_gateway chat-default)
 
 - 测试: `uv run pytest packages/kb -q`(db/store 测试需真 PG(anvil_test 库),embed 测试需本地 fastembed 模型;其余走 mock)
-- Golden 语料: `packages/kb/golden/corpus/*.md`(虚构保险产品 3 篇:条款/理赔指南/产品说明);PDF fixture: `packages/kb/golden/pdf/*.pdf`(同三篇,含页眉/页脚/表格版面陷阱);评测集: `packages/kb/golden/kb.jsonl`(16 例,含 evidences/answerable)
+- Golden 语料: `packages/kb/golden/corpus/*.md`(虚构保险产品 3 篇:条款/理赔指南/产品说明);PDF fixture: `packages/kb/golden/pdf/*.pdf`(同三篇,含页眉/页脚/表格版面陷阱);评测集: `packages/kb/golden/kb.jsonl`(50 例:换述/多跳/边界/拒答四类,含 evidences/answerable;防腐烂测试在 `packages/kb/tests/test_golden_dataset.py`)
 - CLI 三命令(需 `ANVIL_DATABASE_URL` 环境变量):
   - `anvil-kb ingest <file.md|file.pdf ...>` — 写入 KB(.pdf 走 hand-rolled pdfplumber 解析器)
   - `anvil-kb query "<question>" [--k 5]` — 检索+生成(需 API key)

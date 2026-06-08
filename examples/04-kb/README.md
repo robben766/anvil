@@ -11,7 +11,7 @@ anvil-kb 是一个手工实现的 RAG 流水线（chunker / fastembed / PgVector
 ### 1. 启动 anvil-postgres
 
 ```bash
-cd /home/itachi/workspace/ai/anvil
+cd <anvil-repo-root>
 docker compose -f infra/docker-compose.yml up -d anvil-postgres
 ```
 
