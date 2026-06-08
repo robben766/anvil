@@ -12,6 +12,9 @@ select = ["E", "F", "I", "UP", "B"]
 asyncio_mode = "auto"
 markers = ["live: real API calls; run manually with -m live"]
 testpaths = ["packages", "apps"]
+# golden/fixtures/ ships intentionally-buggy test_*.py as eval task DATA (the agent runs
+# pytest on it inside a worktree); never collect it as part of anvil's own suite.
+addopts = "--ignore-glob=*/golden/fixtures/*"
 
 [tool.ruff.lint.isort]
 known-first-party = ["anvil_gateway", "anvil_kb", "anvil_kb_api"]
