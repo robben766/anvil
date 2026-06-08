@@ -55,6 +55,7 @@ version = "0.1.0"
 source = { editable = "packages/core/eval" }
 dependencies = [
     { name = "anvil-gateway" },
+    { name = "anvil-guard" },
     { name = "fastembed" },
     { name = "numpy" },
 ]
@@ -70,6 +71,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "anvil-gateway", editable = "packages/core/gateway" },
+    { name = "anvil-guard", editable = "packages/core/guard" },
     { name = "fastembed", specifier = ">=0.3" },
     { name = "numpy", specifier = ">=1.26" },
 ]
