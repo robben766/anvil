@@ -1,3 +1,4 @@
+import json
 import os
 
 import httpx
@@ -79,3 +80,34 @@ async def test_rejects_non_object_json():
     respx.post(DS_URL).mock(return_value=_resp("[1, 2, 3]"))
     with pytest.raises(StructuredOutputError):
         await structured_chat("deepseek-chat", [{"role": "user", "content": "json"}], max_retries=0)
+
+
+@respx.mock
+async def test_none_content_raises():
+    # Model returns a message with no content → must raise, not crash on None.
+    resp = httpx.Response(
+        200,
+        json={
+            "id": "s1",
+            "model": "deepseek-chat",
+            "choices": [
+                {"index": 0, "message": {"role": "assistant"}, "finish_reason": "stop"}
+            ],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 0},
+        },
+    )
+    respx.post(DS_URL).mock(return_value=resp)
+    with pytest.raises(StructuredOutputError):
+        await structured_chat("deepseek-chat", [{"role": "user", "content": "json"}], max_retries=0)
+
+
+@respx.mock
+async def test_response_format_override_is_forwarded():
+    route = respx.post(DS_URL).mock(return_value=_resp('{"ok": true}'))
+    await structured_chat(
+        "deepseek-chat",
+        [{"role": "user", "content": "json"}],
+        response_format={"type": "text"},
+    )
+    sent = json.loads(route.calls.last.request.content)
+    assert sent["response_format"] == {"type": "text"}

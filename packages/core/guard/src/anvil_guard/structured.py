@@ -20,8 +20,8 @@ class StructuredOutputError(ValueError):
 def _parse_json_object(content: str) -> dict[str, Any]:
     text = (content or "").strip()
     if text.startswith("```"):
-        text = text.strip("`")
-        if text.startswith("json"):
+        text = text.strip("`").lstrip()
+        if text[:4].lower() == "json":  # tolerate ```json / ```JSON labels
             text = text[4:]
     obj = json.loads(text.strip())
     if not isinstance(obj, dict):
@@ -58,5 +58,5 @@ async def structured_chat(
         except (json.JSONDecodeError, ValueError) as e:
             last_err = e
     raise StructuredOutputError(
-        f"structured output invalid after {max_retries} retr(y/ies): {last_err}"
+        f"structured output invalid after {max_retries + 1} attempt(s): {last_err}"
     )
