@@ -1,0 +1,1 @@
+{"id": "calc-add", "repo": "fixtures/calc", "prompt": "The test_add test is failing. Read the code, find the bug in calc.py, fix it, and run the tests until they pass.", "verify_cmd": "python -m pytest -q"}
