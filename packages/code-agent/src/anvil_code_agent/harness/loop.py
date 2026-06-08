@@ -34,3 +34,15 @@ async def step(
         return new.advance()
     # no tool calls → the model is done
     return state.append(assistant_msg).advance().finish("done")
+
+
+async def run(
+    state: AgentState, model: str, registry: ToolRegistry, ctx: ToolContext
+) -> AgentState:
+    """Drive step() until the model finishes or max_steps is hit."""
+    with span("code_agent.run", model=model):
+        while state.status == "running":
+            if state.step >= state.max_steps:
+                return state.finish("exhausted")
+            state = await step(state, model, registry, ctx)
+        return state
