@@ -36,3 +36,11 @@ def test_has_refusal_cases():
     cases = load_dataset(str(GOLDEN))
     refusals = [c for c in cases if not c.answerable]
     assert len(refusals) >= 5, "need >=5 unanswerable/refusal cases for the refusal axis"
+
+
+def test_refusal_cases_have_empty_evidences():
+    # A refusal whose "evidence" is actually in the corpus would be a mislabeled case.
+    cases = load_dataset(str(GOLDEN))
+    for c in cases:
+        if not c.answerable:
+            assert not c.evidences, f"{c.id}: refusal case must have empty evidences"
