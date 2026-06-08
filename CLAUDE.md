@@ -70,3 +70,15 @@ hand-rolled RAG pipeline:chunker / fastembed / PgVectorStore(pgvector) / Retriev
 - 构建: `pnpm build`
 - Lint: `pnpm lint`
 - SSE 契约见 spec §6(请求格式) / §7(流式事件格式)
+
+## anvil-code-agent (packages/code-agent)
+
+自建编码 agent harness(圈3 agent):reducer 循环 + ACI 工具 + 闭环验证,worktree 隔离内修 bug。
+
+- `harness/loop.py` — `step()` 一次 tool_use 往返;`run()` while 循环 + max_steps 守护
+- `tools/` — read_file / edit_file(SEARCH-REPLACE+护栏)/ bash(超时截断)/ run_tests(闭环)
+- `sandbox.py` — git worktree 隔离,可 diff 可丢弃
+- `eval/` — Task + runner(worktree→agent→verify)+ pass 率;fixture: calc bug-fix
+- CLI: `anvil-code-agent solve --repo <r> --prompt "<p>"` / `anvil-code-agent eval --dataset <tasks.jsonl>`
+- 测试: `uv run pytest packages/code-agent -q`(工具/沙箱纯本地;loop/runner 走 respx mock + 测试 PG@5434);live 冒烟需 DEEPSEEK_API_KEY
+- 复用 gateway(tool_use 往返)/obs(span 追踪每步工具)/eval 基建
