@@ -11,6 +11,7 @@ resolution-markers = [
 members = [
     "anvil-eval",
     "anvil-gateway",
+    "anvil-guard",
     "anvil-kb",
     "anvil-kb-api",
     "anvil-obs",
@@ -127,6 +128,35 @@ dev = [
     { name = "pytest", specifier = ">=8" },
     { name = "pytest-asyncio", specifier = ">=0.24" },
     { name = "pytest-cov", specifier = ">=7.1.0" },
+    { name = "respx", specifier = ">=0.21" },
+    { name = "ruff", specifier = ">=0.6" },
+]
+
+[[package]]
+name = "anvil-guard"
+version = "0.1.0"
+source = { editable = "packages/core/guard" }
+dependencies = [
+    { name = "anvil-gateway" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "httpx" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "respx" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "anvil-gateway", editable = "packages/core/gateway" }]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "pytest", specifier = ">=8" },
+    { name = "pytest-asyncio", specifier = ">=0.24" },
     { name = "respx", specifier = ">=0.21" },
     { name = "ruff", specifier = ">=0.6" },
 ]
