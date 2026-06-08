@@ -207,6 +207,7 @@ name = "anvil-kb-api"
 version = "0.1.0"
 source = { editable = "apps/kb-api" }
 dependencies = [
+    { name = "anvil-guard" },
     { name = "anvil-kb" },
     { name = "fastapi" },
     { name = "python-dotenv" },
@@ -216,6 +217,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "anvil-guard", editable = "packages/core/guard" },
     { name = "anvil-kb", editable = "packages/kb" },
     { name = "fastapi", specifier = ">=0.110" },
     { name = "python-dotenv", specifier = ">=1.0" },

@@ -21,6 +21,7 @@ from datetime import datetime
 from typing import Any
 
 import uvicorn
+from anvil_guard import detect_injection
 from fastapi import FastAPI, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
@@ -469,6 +470,13 @@ def create_app(
 
         if not req.question or not req.question.strip():
             raise HTTPException(status_code=400, detail="question must not be empty")
+
+        verdict = detect_injection(req.question)
+        if verdict.is_injection:
+            raise HTTPException(
+                status_code=403,
+                detail=f"query rejected: possible prompt injection ({verdict.category})",
+            )
 
         # H4: non-stream + debug is not supported
         if not req.stream and req.debug:
