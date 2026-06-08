@@ -6,7 +6,7 @@ import argparse
 import asyncio
 import os
 
-from anvil_code_agent.eval.runner import pass_rate, solve_task
+from anvil_code_agent.eval.runner import RunResult, pass_rate, solve_task
 from anvil_code_agent.eval.task import Task, load_tasks
 from anvil_gateway import configure
 
@@ -35,6 +35,22 @@ def _configure_gateway() -> None:
         configure(database_url=url)
 
 
+async def _run_eval(tasks: list[Task], *, model: str, max_steps: int) -> list[RunResult]:
+    """Run eval over all tasks, isolating per-task failures so one error never aborts
+    the whole batch. A task that raises is recorded as passed=False."""
+    results: list[RunResult] = []
+    for t in tasks:
+        try:
+            res = await solve_task(t, model=model, max_steps=max_steps)
+        except Exception as e:  # noqa: BLE001 — a broken task must not abort the batch
+            print(f"  {t.id}: ERROR ({e})")
+            res = RunResult(task_id=t.id, passed=False, steps=0, diff="")
+        else:
+            print(f"  {res.task_id}: {'PASS' if res.passed else 'FAIL'} ({res.steps} steps)")
+        results.append(res)
+    return results
+
+
 async def _run(ns: argparse.Namespace) -> int:
     _configure_gateway()
     if ns.command == "solve":
@@ -45,11 +61,7 @@ async def _run(ns: argparse.Namespace) -> int:
         return 0 if res.passed else 1
     # eval
     tasks = load_tasks(ns.dataset)
-    results = []
-    for t in tasks:
-        res = await solve_task(t, model=ns.model, max_steps=ns.max_steps)
-        print(f"  {res.task_id}: {'PASS' if res.passed else 'FAIL'} ({res.steps} steps)")
-        results.append(res)
+    results = await _run_eval(tasks, model=ns.model, max_steps=ns.max_steps)
     rate = pass_rate(results)
     print(f"pass rate: {rate:.2%} ({sum(r.passed for r in results)}/{len(results)})")
     return 0
