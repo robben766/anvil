@@ -1,0 +1,14 @@
+{"id": "cal-01", "question": "等待期是多少天?", "reference": "本合同等待期为90天。", "answer": "等待期为90天。", "human_score": 1.0}
+{"id": "cal-02", "question": "等待期是多少天?", "reference": "本合同等待期为90天。", "answer": "等待期是30天。", "human_score": 0.0}
+{"id": "cal-03", "question": "犹豫期多长?", "reference": "本合同设有15天犹豫期。", "answer": "犹豫期为15天,期内可全额退保。", "human_score": 1.0}
+{"id": "cal-04", "question": "犹豫期多长?", "reference": "本合同设有15天犹豫期。", "answer": "大概十几天吧,具体记不清。", "human_score": 0.5}
+{"id": "cal-05", "question": "重疾赔多少?", "reference": "确诊重大疾病按保险金额的100%给付。", "answer": "确诊重疾后一次性给付100%保额。", "human_score": 1.0}
+{"id": "cal-06", "question": "重疾赔多少?", "reference": "确诊重大疾病按保险金额的100%给付。", "answer": "赔付50%保额。", "human_score": 0.0}
+{"id": "cal-07", "question": "意外在等待期赔吗?", "reference": "意外伤害不受等待期限制,合同生效后即保障。", "answer": "意外伤害不受等待期限制。", "human_score": 1.0}
+{"id": "cal-08", "question": "意外在等待期赔吗?", "reference": "意外伤害不受等待期限制,合同生效后即保障。", "answer": "等待期内意外也不赔。", "human_score": 0.0}
+{"id": "cal-09", "question": "理赔第一步做什么?", "reference": "出险后应及时报案。", "answer": "先报案,再准备材料。", "human_score": 1.0}
+{"id": "cal-10", "question": "理赔第一步做什么?", "reference": "出险后应及时报案。", "answer": "直接去公司柜台领钱。", "human_score": 0.0}
+{"id": "cal-11", "question": "共保障多少种重疾?", "reference": "本合同约定的重大疾病共25种。", "answer": "保障25种重大疾病。", "human_score": 1.0}
+{"id": "cal-12", "question": "共保障多少种重疾?", "reference": "本合同约定的重大疾病共25种。", "answer": "好像有几十种。", "human_score": 0.5}
+{"id": "cal-13", "question": "犹豫期退保扣钱吗?", "reference": "犹豫期内退保全额退还,不收取任何费用。", "answer": "犹豫期退保不收任何费用,全额退还。", "human_score": 1.0}
+{"id": "cal-14", "question": "犹豫期退保扣钱吗?", "reference": "犹豫期内退保全额退还,不收取任何费用。", "answer": "要扣10%手续费。", "human_score": 0.0}
