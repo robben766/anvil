@@ -14,7 +14,7 @@ def _resolve(workdir: str, path: str) -> str:
 
 @tool(
     name="read_file",
-    description="Read a file relative to the working dir. Returns lines prefixed with line numbers.",
+    description="Read a file relative to the working dir. Returns lines prefixed with line numbers.",  # noqa: E501
     params={
         "path": {"type": "string", "description": "file path relative to working dir"},
     },
@@ -68,7 +68,10 @@ def edit_file(args: dict, ctx: ToolContext) -> ToolResult:
         )
     if count > 1:
         return ToolResult(
-            content=f"search block matched {count} times (multiple matches) in {path}; make it more specific (unique)",
+            content=(
+                f"search block matched {count} times (multiple matches) in {path};"
+                " make it more specific (unique)"
+            ),
             ok=False,
         )
     new_text = text.replace(search, replace, 1)

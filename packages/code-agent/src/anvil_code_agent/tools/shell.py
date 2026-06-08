@@ -35,5 +35,7 @@ def bash(args: dict, ctx: ToolContext) -> ToolResult:
     out = (proc.stdout or "") + (proc.stderr or "")
     out, truncated = _truncate(out, ctx.max_output)
     if proc.returncode != 0:
-        return ToolResult(content=f"exit code {proc.returncode}\n{out}", ok=False, truncated=truncated)
+        return ToolResult(
+            content=f"exit code {proc.returncode}\n{out}", ok=False, truncated=truncated
+        )
     return ToolResult(content=out, ok=True, truncated=truncated)

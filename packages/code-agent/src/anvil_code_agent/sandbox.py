@@ -15,7 +15,7 @@ class Worktree:
         self.path = os.path.join(tempfile.gettempdir(), f"anvil-wt-{uuid.uuid4().hex[:8]}")
         self._branch = f"anvil/wt-{uuid.uuid4().hex[:8]}"
 
-    def __enter__(self) -> "Worktree":
+    def __enter__(self) -> Worktree:
         subprocess.run(
             ["git", "worktree", "add", "-q", "-b", self._branch, self.path, "HEAD"],
             cwd=self.repo,

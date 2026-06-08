@@ -1,9 +1,13 @@
-import pytest
 from anvil_code_agent.tools.base import ToolContext, ToolRegistry, ToolResult, tool
 
 
 def test_tool_decorator_builds_schema():
-    @tool(name="echo", description="echo text", params={"text": {"type": "string"}}, required=["text"])
+    @tool(
+        name="echo",
+        description="echo text",
+        params={"text": {"type": "string"}},
+        required=["text"],
+    )
     def echo(args, ctx):
         return ToolResult(content=args["text"], ok=True)
 

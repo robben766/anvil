@@ -3,8 +3,9 @@ even on failure — the failure text is feedback the model uses to retry (12-Fac
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 
 @dataclass
