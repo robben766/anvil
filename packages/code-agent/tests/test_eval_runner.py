@@ -1,7 +1,6 @@
 import subprocess
 from pathlib import Path
 
-import pytest
 from anvil_code_agent.eval.runner import RunResult, solve_task
 from anvil_code_agent.eval.task import Task
 

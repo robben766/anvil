@@ -5,11 +5,11 @@ from __future__ import annotations
 
 import json
 
-from anvil_gateway import chat
 from anvil_obs import span
 
 from anvil_code_agent.state import AgentState
 from anvil_code_agent.tools.base import ToolContext, ToolRegistry
+from anvil_gateway import chat
 
 
 async def step(
