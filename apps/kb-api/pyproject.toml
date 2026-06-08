@@ -6,6 +6,7 @@ requires-python = ">=3.12"
 dependencies = [
     "anvil-kb",
     "fastapi>=0.110",
+    "python-dotenv>=1.0",
     "python-multipart>=0.0.9",
     "uvicorn>=0.30",
 ]

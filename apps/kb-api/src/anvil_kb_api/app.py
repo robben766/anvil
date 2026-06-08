@@ -619,7 +619,28 @@ def _serialize_dt(dt: datetime) -> str:
     return dt.isoformat()
 
 
+def _load_env() -> None:
+    """Load .env from the anvil repo root (nearest ancestor of cwd) if present.
+
+    Lets `anvil-kb-api` run without manually `source`-ing .env. Graceful no-op
+    when python-dotenv is absent or no .env is found.
+    """
+    try:
+        from dotenv import load_dotenv  # type: ignore[import]
+    except ImportError:
+        return
+    from pathlib import Path
+
+    here = Path.cwd()
+    for candidate in [here, *here.parents]:
+        env_file = candidate / ".env"
+        if env_file.exists():
+            load_dotenv(env_file)
+            break
+
+
 def run() -> None:
     """Entry point: uvicorn on 0.0.0.0:8400."""
+    _load_env()  # must precede create_app(): it reads ANVIL_DATABASE_URL et al.
     app = create_app()
     uvicorn.run(app, host="0.0.0.0", port=8400)
