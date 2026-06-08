@@ -9,6 +9,9 @@ dependencies = [
     "anvil-eval",
 ]
 
+[project.scripts]
+anvil-council = "anvil_council.cli:main"
+
 [dependency-groups]
 dev = [
     "pytest>=8",
