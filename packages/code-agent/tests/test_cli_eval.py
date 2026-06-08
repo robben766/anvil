@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import pytest
-
+from anvil_code_agent.cli import _run_eval
 from anvil_code_agent.eval.runner import RunResult
 from anvil_code_agent.eval.task import Task
-from anvil_code_agent.cli import _run_eval
 
 
 async def _fake_solve_pass(task, *, model, max_steps):

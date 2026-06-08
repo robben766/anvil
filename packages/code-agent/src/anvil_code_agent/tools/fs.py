@@ -14,7 +14,11 @@ def _resolve(workdir: str, path: str) -> str:
 
 @tool(
     name="read_file",
-    description="Read a file relative to the working dir. Returns lines prefixed with line numbers.",  # noqa: E501
+    description=(
+        "Read a file relative to the working dir. Returns lines prefixed with line numbers. "
+        "NOTE: paths are not sandboxed in M1 — absolute or '../' paths can escape the worktree; "
+        "true filesystem isolation is deferred to M3 (Docker)."
+    ),
     params={
         "path": {"type": "string", "description": "file path relative to working dir"},
     },
@@ -42,7 +46,9 @@ def read_file(args: dict, ctx: ToolContext) -> ToolResult:
     description=(
         "Replace an EXACT unique snippet in a file. 'search' must match exactly once "
         "(whitespace-sensitive). If it matches zero or multiple times, the edit is rejected "
-        "and you must read the file and provide a more specific search block."
+        "and you must read the file and provide a more specific search block. "
+        "NOTE: paths are not sandboxed in M1 — absolute or '../' paths can escape the worktree; "
+        "true filesystem isolation is deferred to M3 (Docker)."
     ),
     params={
         "path": {"type": "string", "description": "file path relative to working dir"},

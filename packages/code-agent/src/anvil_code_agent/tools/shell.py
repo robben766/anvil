@@ -16,7 +16,11 @@ def _truncate(text: str, limit: int) -> tuple[str, bool]:
 
 @tool(
     name="bash",
-    description="Run a shell command in the working dir. Returns combined stdout+stderr.",
+    description=(
+        "Run a shell command in the working dir. Returns combined stdout+stderr. "
+        "NOTE: commands are not sandboxed in M1 — they can read/write outside the worktree; "
+        "true process isolation is deferred to M3 (Docker)."
+    ),
     params={"cmd": {"type": "string", "description": "shell command"}},
     required=["cmd"],
 )
