@@ -49,7 +49,7 @@ hand-rolled RAG pipeline:chunker / fastembed / PgVectorStore(pgvector) / Retriev
 - CLI: `anvil-council judge --dataset … --models deepseek-chat,qwen-plus` / `anvil-council calibrate --dataset …`
 - 测试: `uv run pytest packages/core/council -q`(respx mock,无需 key);live 实验需 DEEPSEEK + 百炼 DASHSCOPE key
 - 复用 gateway/guard/eval,编排原语供 P3 复用
-- 实测(30 条):jury κ=0.626,qwen-plus 0.681,deepseek 0.574 —— 弱评委稀释强评委,陪审团未跑赢最佳单评委(诚实负结果)
+- 实测(30 条):jury κ=0.626,qwen-plus 0.681,deepseek 0.526,评委间 Fleiss' κ=0.815 —— 评委高度冗余(非互补),弱评委稀释强评委,陪审团未跑赢最佳单评委(诚实负结果)
 
 ## apps/
 

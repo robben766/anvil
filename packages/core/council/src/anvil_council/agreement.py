@@ -52,6 +52,7 @@ class CompareReport:
     single_vs_human: dict[str, float]
     best_single_kappa: float
     jury_beats_best_single: bool
+    inter_juror_fleiss: float  # agreement AMONG jurors (Fleiss' κ); nan if < 2 jurors
 
     def to_markdown(self) -> str:
         lines = [
@@ -66,6 +67,10 @@ class CompareReport:
         lines.append(
             f"- best single κ = {self.best_single_kappa:.3f} — jury beats best single: {verdict}"
         )
+        fleiss = "n/a (<2 jurors)" if self.inter_juror_fleiss != self.inter_juror_fleiss else (
+            f"{self.inter_juror_fleiss:.3f}"
+        )
+        lines.append(f"- inter-juror agreement (Fleiss' κ) = {fleiss}")
         return "\n".join(lines) + "\n"
 
 
@@ -84,10 +89,20 @@ def compare_jury(
         for model, scores in juror_overalls.items()
     }
     best_single = max(single.values()) if single else 0.0
+    # inter-juror agreement: per item, the quantized label each juror gave → Fleiss' κ
+    models = list(juror_overalls.keys())
+    if len(models) >= 2 and human_scores:
+        item_labels = [
+            [quantize(juror_overalls[m][i]) for m in models] for i in range(len(human_scores))
+        ]
+        inter_juror_fleiss = jurors_fleiss(item_labels, num_categories=3)
+    else:
+        inter_juror_fleiss = float("nan")  # undefined with a single juror
     return CompareReport(
         n=len(human_scores),
         jury_vs_human=jury_k,
         single_vs_human=single,
         best_single_kappa=best_single,
         jury_beats_best_single=jury_k > best_single,
+        inter_juror_fleiss=inter_juror_fleiss,
     )
