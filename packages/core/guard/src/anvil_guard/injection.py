@@ -7,6 +7,12 @@ Design: each pattern carries a category. A match flags injection with confidence
 scaled by how many distinct patterns fired (capped at 1.0). Benign queries that merely
 contain words like "忽略"/"ignore"/"system" do not match because patterns require the
 *adversarial collocation* (e.g. ignore + instructions), not the lone word.
+
+Deliberate limits (delegated to detect_injection_llm, the optional semantic fallback):
+obfuscated/leetspeak attacks (e.g. "1gn0re"), non-EN/ZH languages, and novel paraphrases
+that don't reuse the enumerated vocabulary will slip past this deterministic fast path.
+The fast path optimizes for sub-millisecond rejection of common, literal attacks at high
+precision (rarely blocking legitimate users), NOT for exhaustive recall.
 """
 
 from __future__ import annotations
@@ -28,7 +34,7 @@ _PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
     (
         "zh_ignore_instructions",
         "instruction_override",
-        re.compile(r"(忽略|无视|不要管|不用管)[^。\n]{0,12}(指令|提示|规则|要求|设定)"),
+        re.compile(r"(忽略|无视|不要管|不用管|不要理会|别理会)[^。\n]{0,12}(指令|提示|规则|要求|设定|命令)"),
     ),
     (
         "zh_new_rules_override",
@@ -40,21 +46,25 @@ _PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
         "instruction_override",
         re.compile(
             r"(ignore|disregard|forget)\s+(all\s+|the\s+)?(previous|above|prior|earlier)?\s*"
-            r"(instructions|prompts|rules|everything)",
+            r"(instructions|prompts|rules|everything|directions|commands)",
             re.IGNORECASE,
         ),
     ),
     (
         "zh_prompt_leak",
         "prompt_leak",
-        re.compile(r"(输出|显示|泄露|发给我|重复|告诉我).{0,12}(系统提示|提示词|初始指令|你的指令)"),
+        re.compile(
+            r"(输出|显示|泄露|发给我|重复|复述|告诉我).{0,12}(系统提示|提示词|初始指令|你的指令)"
+            r"|(系统提示|提示词|初始指令|你的指令).{0,12}(复述|输出|发出来|发给我|说一遍)"
+        ),
     ),
     (
         "en_prompt_leak",
         "prompt_leak",
         re.compile(
             r"(reveal|print|repeat|show|output|leak).{0,20}"
-            r"(system prompt|initial instructions|hidden (config|configuration|prompt))",
+            r"(system prompt|initial instructions|hidden (config|configuration|prompt)"
+            r"|the (words|text|prompt) above)",
             re.IGNORECASE,
         ),
     ),
@@ -67,7 +77,8 @@ _PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
         "en_jailbreak_roleplay",
         "jailbreak",
         re.compile(
-            r"(you are now|act as|pretend you are|developer mode|\bDAN\b)"
+            r"(you are now|pretend you are|developer mode|\bDAN\b)"
+            r"|act as\s+(an?\s+)?(unrestricted|jailbroken|evil|uncensored|developer|dan)"
             r"|(unrestricted|jailbroken|no restrictions|restrictions are disabled)",
             re.IGNORECASE,
         ),
@@ -76,7 +87,8 @@ _PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
         "delimiter_injection",
         "delimiter_injection",
         re.compile(
-            r"(```|<\|)\s*(system|inst)|\[INST\]|\[/INST\]|(override|disable).{0,12}(guardrail|safety)",
+            r"(```|<\|)\s*(system|inst)|\[INST\]|\[/INST\]|(^|\n)\s*system\s*:"
+            r"|(override|disable).{0,12}(guardrail|safety)",
             re.IGNORECASE,
         ),
     ),
