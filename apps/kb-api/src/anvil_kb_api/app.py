@@ -21,6 +21,7 @@ from datetime import datetime
 from typing import Any
 
 import uvicorn
+from anvil_guard import detect_injection
 from fastapi import FastAPI, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
@@ -470,6 +471,13 @@ def create_app(
         if not req.question or not req.question.strip():
             raise HTTPException(status_code=400, detail="question must not be empty")
 
+        verdict = detect_injection(req.question)
+        if verdict.is_injection:
+            raise HTTPException(
+                status_code=403,
+                detail=f"query rejected: possible prompt injection ({verdict.category})",
+            )
+
         # H4: non-stream + debug is not supported
         if not req.stream and req.debug:
             raise HTTPException(
@@ -619,7 +627,28 @@ def _serialize_dt(dt: datetime) -> str:
     return dt.isoformat()
 
 
+def _load_env() -> None:
+    """Load .env from the anvil repo root (nearest ancestor of cwd) if present.
+
+    Lets `anvil-kb-api` run without manually `source`-ing .env. Graceful no-op
+    when python-dotenv is absent or no .env is found.
+    """
+    try:
+        from dotenv import load_dotenv  # type: ignore[import]
+    except ImportError:
+        return
+    from pathlib import Path
+
+    here = Path.cwd()
+    for candidate in [here, *here.parents]:
+        env_file = candidate / ".env"
+        if env_file.exists():
+            load_dotenv(env_file)
+            break
+
+
 def run() -> None:
     """Entry point: uvicorn on 0.0.0.0:8400."""
+    _load_env()  # must precede create_app(): it reads ANVIL_DATABASE_URL et al.
     app = create_app()
     uvicorn.run(app, host="0.0.0.0", port=8400)

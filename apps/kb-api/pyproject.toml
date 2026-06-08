@@ -5,13 +5,16 @@ description = "anvil knowledge base API: FastAPI CRUD shell for anvil-kb"
 requires-python = ">=3.12"
 dependencies = [
     "anvil-kb",
+    "anvil-guard",
     "fastapi>=0.110",
+    "python-dotenv>=1.0",
     "python-multipart>=0.0.9",
     "uvicorn>=0.30",
 ]
 
 [tool.uv.sources]
 anvil-kb = { workspace = true }
+anvil-guard = { workspace = true }
 
 [project.scripts]
 anvil-kb-api = "anvil_kb_api.app:run"

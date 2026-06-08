@@ -182,6 +182,16 @@ async def _run_ingest_command(
 async def _run_query_command(
     question: str, k: int, embedder, session_factory, *, rerank: bool = False
 ) -> None:
+    from anvil_guard import detect_injection
+
+    verdict = detect_injection(question)
+    if verdict.is_injection:
+        print(
+            f"⛔ 查询被安全守卫拦截(疑似提示注入:{verdict.category})。"
+            "出于安全考虑,本次请求不进入检索与生成。"
+        )
+        return
+
     from anvil_kb.generate import answer
     from anvil_kb.retrieve.retriever import Retriever
     from anvil_kb.store.bm25 import PgBM25Index

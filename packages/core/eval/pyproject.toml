@@ -5,12 +5,14 @@ description = "anvil P0: hand-rolled RAGAS metrics with golden-set runner"
 requires-python = ">=3.12"
 dependencies = [
     "anvil-gateway",
+    "anvil-guard",
     "fastembed>=0.3",
     "numpy>=1.26",
 ]
 
 [tool.uv.sources]
 anvil-gateway = { workspace = true }
+anvil-guard = { workspace = true }
 
 [dependency-groups]
 dev = [

@@ -11,7 +11,7 @@ anvil-kb 是一个手工实现的 RAG 流水线（chunker / fastembed / PgVector
 ### 1. 启动 anvil-postgres
 
 ```bash
-cd /home/itachi/workspace/ai/anvil
+cd <anvil-repo-root>
 docker compose -f infra/docker-compose.yml up -d anvil-postgres
 ```
 
@@ -305,3 +305,31 @@ enrich: 25 calls, 19375 prompt tokens, cache hit 89.2%, cost ¥0.004178
 ### 实验后语料状态
 
 已重新执行非富集灌入，恢复 `context_prefix=''` 基线状态：MRR=0.881，与实验前一致。
+
+## 安全竖梁 + 评测强化(Core-Guard)
+
+P1 之后补齐三竖梁中最空的「安全」,并强化「质量」竖梁。能力放在通用层
+`packages/core/guard`(anvil-guard),知识库是第一个消费方。
+
+### 提示注入检测(packages/core/guard)
+
+- 确定性规则快路:中英双语关键词/正则,覆盖「忽略既定指令 / 泄露系统提示 /
+  角色越狱 / 分隔符注入」四类,零延迟、零成本、纯函数。
+- 可选 LLM 语义兜底(detect_injection_llm),默认关闭。
+- 对抗集实测(`uv run python -m anvil_guard.experiments.injection_eval`,N=30):
+  precision=1.000,recall=1.000,f1=1.000(关键负例:含「忽略/ignore/system」
+  的良性提问不误报)。规则快路对**已枚举模式**召回高,对混淆/小众语言/全新改写
+  的兜底交给可选 LLM 语义检测。
+- 接线:kb CLI 与 kb-api 在检索前调 detect_injection,命中即拒绝(API 返回 403),
+  不进检索、不调生成。
+
+### Judge 校准(packages/core/eval)
+
+- 手写 Cohen's κ(不依赖 sklearn),把 judge 连续分与人工标注分各量化到 3 档求一致性。
+- `anvil-eval calibrate --dataset golden/calibration.jsonl` 输出真实 κ;低于阈值
+  (默认 0.6)打印警告「judge 不可信」(警告门,不阻断 CI)。
+
+### Golden 扩容
+
+kb 评测集从 16 条扩到 50 条:换述 / 多跳 / 边界 / 拒答四类,防腐烂测试锁定
+「answerable 用例的 evidences 必须是语料原文子串」「≥5 条拒答用例」。

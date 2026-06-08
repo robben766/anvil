@@ -1,99 +1,46 @@
-"""防腐烂测试:验证 packages/kb/golden/kb.jsonl 与 corpus 语料保持一致。
+from pathlib import Path
 
-运行方式: uv run pytest packages/kb -q  (从仓库根执行)
-"""
-from __future__ import annotations
-
-import pathlib
-
-import pytest
 from anvil_eval.dataset import load_dataset
 
-# ── 路径 ─────────────────────────────────────────────────────────────────────
-# __file__ = packages/kb/tests/test_golden_dataset.py
-# REPO_ROOT = packages/kb/../../..  → 仓库根
-_KB_ROOT = pathlib.Path(__file__).parent.parent
-_GOLDEN_JSONL = _KB_ROOT / "golden" / "kb.jsonl"
-_CORPUS_DIR = _KB_ROOT / "golden" / "corpus"
+GOLDEN = Path(__file__).resolve().parents[1] / "golden" / "kb.jsonl"
+CORPUS_DIR = Path(__file__).resolve().parents[1] / "golden" / "corpus"
 
 
-def _load_corpus_texts() -> list[str]:
-    """读取 corpus/ 下所有 .md 文件并返回其文本列表。"""
-    return [f.read_text(encoding="utf-8") for f in sorted(_CORPUS_DIR.glob("*.md"))]
+def _corpus_text() -> str:
+    return "\n".join(p.read_text(encoding="utf-8") for p in sorted(CORPUS_DIR.glob("*.md")))
 
 
-# ── 基础加载测试 ──────────────────────────────────────────────────────────────
+def test_dataset_loads_and_is_large_enough():
+    cases = load_dataset(str(GOLDEN))
+    assert len(cases) >= 50, f"expected >=50 golden cases, got {len(cases)}"
 
 
-def test_load_dataset_succeeds_with_16_cases():
-    """kb.jsonl 能被 load_dataset 加载且恰好有 16 条用例。"""
-    cases = load_dataset(str(_GOLDEN_JSONL))
-    assert len(cases) == 16, f"Expected 16 cases, got {len(cases)}"
+def test_ids_unique():
+    cases = load_dataset(str(GOLDEN))
+    ids = [c.id for c in cases]
+    assert len(ids) == len(set(ids))
 
 
-# ── evidence 子串验证 ─────────────────────────────────────────────────────────
+def test_answerable_cases_have_grounded_evidences():
+    corpus = _corpus_text()
+    cases = load_dataset(str(GOLDEN))
+    answerable = [c for c in cases if c.answerable]
+    assert len(answerable) >= 40
+    for c in answerable:
+        assert c.evidences, f"{c.id}: answerable case must have evidences"
+        for ev in c.evidences:
+            assert ev in corpus, f"{c.id}: evidence not found verbatim in corpus: {ev!r}"
 
 
-def test_all_evidences_are_corpus_substrings():
-    """每条 evidence 空白归一化后必须是 corpus 至少一篇文本的子串。"""
-    cases = load_dataset(str(_GOLDEN_JSONL))
-    corpus_texts = _load_corpus_texts()
-    normalized_corpus = ["".join(t.split()) for t in corpus_texts]
-
-    failures: list[str] = []
-    for case in cases:
-        for ev in case.evidences:
-            normalized_ev = "".join(ev.split())
-            found = any(normalized_ev in nc for nc in normalized_corpus)
-            if not found:
-                failures.append(f"[{case.id}] evidence not found in corpus: {ev!r}")
-
-    assert not failures, "Evidence substring check failed:\n" + "\n".join(failures)
+def test_has_refusal_cases():
+    cases = load_dataset(str(GOLDEN))
+    refusals = [c for c in cases if not c.answerable]
+    assert len(refusals) >= 5, "need >=5 unanswerable/refusal cases for the refusal axis"
 
 
-# ── answerable 字段一致性 ─────────────────────────────────────────────────────
-
-
-def test_answerable_false_cases_have_empty_evidences():
-    """answerable=false 的用例 evidences 必须为空列表。"""
-    cases = load_dataset(str(_GOLDEN_JSONL))
-    violations = [
-        f"{c.id}: answerable=false but evidences={c.evidences!r}"
-        for c in cases
-        if not c.answerable and c.evidences
-    ]
-    assert not violations, "\n".join(violations)
-
-
-def test_answerable_true_cases_have_nonempty_evidences():
-    """answerable=true 的用例 evidences 必须非空。"""
-    cases = load_dataset(str(_GOLDEN_JSONL))
-    violations = [
-        f"{c.id}: answerable=true but evidences is empty"
-        for c in cases
-        if c.answerable and not c.evidences
-    ]
-    assert not violations, "\n".join(violations)
-
-
-# ── 参数化逐条验证 ────────────────────────────────────────────────────────────
-
-
-@pytest.fixture(scope="module")
-def kb_cases():
-    return load_dataset(str(_GOLDEN_JSONL))
-
-
-@pytest.fixture(scope="module")
-def normalized_corpus():
-    return ["".join(t.split()) for t in _load_corpus_texts()]
-
-
-@pytest.mark.parametrize(
-    "case_id",
-    [f"kb-{i:02d}" for i in range(1, 17)],
-)
-def test_case_exists(case_id, kb_cases):
-    """每个预期 id 在数据集中都存在。"""
-    ids = {c.id for c in kb_cases}
-    assert case_id in ids, f"Missing case id: {case_id}"
+def test_refusal_cases_have_empty_evidences():
+    # A refusal whose "evidence" is actually in the corpus would be a mislabeled case.
+    cases = load_dataset(str(GOLDEN))
+    for c in cases:
+        if not c.answerable:
+            assert not c.evidences, f"{c.id}: refusal case must have empty evidences"
