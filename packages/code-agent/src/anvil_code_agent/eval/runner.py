@@ -3,6 +3,11 @@ task's command. pass = the verify command succeeds after the agent runs."""
 
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
+import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 from anvil_code_agent.eval.task import Task
@@ -32,15 +37,57 @@ def default_registry() -> ToolRegistry:
     return ToolRegistry([read_file, edit_file, bash, run_tests])
 
 
-async def solve_task(task: Task, *, model: str, max_steps: int = 20) -> RunResult:
-    with Worktree(task.repo) as wt:
-        ctx = ToolContext(workdir=wt.path)
-        state = AgentState.new(
-            system=SYSTEM_PROMPT, task=task.prompt, workdir=wt.path, max_steps=max_steps
+@contextmanager
+def staged_repo(path: str):
+    """Yield a path that is a standalone git repo root suitable for Worktree.
+
+    - If *path* is already its own git repo root, yield it unchanged (no copy).
+    - Otherwise (non-git dir, or a subdir nested inside a larger repo such as the
+      golden fixture nested inside the anvil repo), copy the tree into a fresh
+      tempdir, git-init it, commit everything, yield the temp root, then clean up.
+    """
+    abs_path = os.path.abspath(path)
+    # Check if path is its own git root
+    result = subprocess.run(
+        ["git", "-C", abs_path, "rev-parse", "--show-toplevel"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0 and os.path.abspath(result.stdout.strip()) == abs_path:
+        yield abs_path
+        return
+
+    # Not its own git root: copy into a fresh tempdir and init a git repo there
+    tmp_root = tempfile.mkdtemp(prefix="anvil-staged-")
+    tmp_repo = os.path.join(tmp_root, "repo")
+    try:
+        shutil.copytree(abs_path, tmp_repo)
+        subprocess.run(["git", "init", "-q"], cwd=tmp_repo, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "staged@anvil"],
+            cwd=tmp_repo, check=True,
         )
-        final = await run(state, model, default_registry(), ctx)
-        verdict = run_tests({"cmd": task.verify_cmd}, ctx)
-        return RunResult(task_id=task.id, passed=verdict.ok, steps=final.step, diff=wt.diff())
+        subprocess.run(
+            ["git", "config", "user.name", "anvil-staged"],
+            cwd=tmp_repo, check=True,
+        )
+        subprocess.run(["git", "add", "."], cwd=tmp_repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "staged"], cwd=tmp_repo, check=True)
+        yield tmp_repo
+    finally:
+        shutil.rmtree(tmp_root, ignore_errors=True)
+
+
+async def solve_task(task: Task, *, model: str, max_steps: int = 20) -> RunResult:
+    with staged_repo(task.repo) as repo_root:
+        with Worktree(repo_root) as wt:
+            ctx = ToolContext(workdir=wt.path)
+            state = AgentState.new(
+                system=SYSTEM_PROMPT, task=task.prompt, workdir=wt.path, max_steps=max_steps
+            )
+            final = await run(state, model, default_registry(), ctx)
+            verdict = run_tests({"cmd": task.verify_cmd}, ctx)
+            return RunResult(task_id=task.id, passed=verdict.ok, steps=final.step, diff=wt.diff())
 
 
 def pass_rate(results: list[RunResult]) -> float:
