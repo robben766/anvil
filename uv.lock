@@ -170,6 +170,7 @@ source = { editable = "packages/kb" }
 dependencies = [
     { name = "alembic" },
     { name = "anvil-gateway" },
+    { name = "anvil-guard" },
     { name = "asyncpg" },
     { name = "fastembed" },
     { name = "jieba" },
@@ -188,6 +189,7 @@ dev = [
 requires-dist = [
     { name = "alembic", specifier = ">=1.13" },
     { name = "anvil-gateway", editable = "packages/core/gateway" },
+    { name = "anvil-guard", editable = "packages/core/guard" },
     { name = "asyncpg", specifier = ">=0.29" },
     { name = "fastembed", specifier = ">=0.3" },
     { name = "jieba", specifier = ">=0.42" },
