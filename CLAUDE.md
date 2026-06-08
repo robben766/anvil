@@ -39,6 +39,18 @@ hand-rolled RAG pipeline:chunker / fastembed / PgVectorStore(pgvector) / Retriev
 
 - `anvil-eval calibrate --dataset golden/calibration.jsonl [--threshold 0.6]` — judge↔人工标注一致性(手写 Cohen's κ),低于阈值仅警告
 
+## anvil-council (packages/core/council)
+
+多模型评测陪审团(圈1 普适):多个不同模型独立按 rubric 打分 → 聚合 → 标分歧 → 校准。
+
+- `score_case(case, models)` — 多陪审员并行独立打分(走 structured_chat)
+- `aggregate(scores)` — 分项中位数 + 分歧探测 + 置信度
+- `fleiss_kappa` / `compare_jury` — 多评委一致性 + 陪审团 vs 人工 vs 最佳单评委
+- CLI: `anvil-council judge --dataset … --models deepseek-chat,qwen-plus` / `anvil-council calibrate --dataset …`
+- 测试: `uv run pytest packages/core/council -q`(respx mock,无需 key);live 实验需 DEEPSEEK + 百炼 DASHSCOPE key
+- 复用 gateway/guard/eval,编排原语供 P3 复用
+- 实测(30 条):jury κ=0.626,qwen-plus 0.681,deepseek 0.526,评委间 Fleiss' κ=0.815 —— 评委高度冗余(非互补),弱评委稀释强评委,陪审团未跑赢最佳单评委(诚实负结果)
+
 ## apps/
 
 ### kb-api (apps/kb-api)
