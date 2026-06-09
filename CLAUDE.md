@@ -128,5 +128,21 @@ AI 员工(圈3 集大成,P4):cron 定时唤醒员工 → PG 队列 → worker �
 - example: `examples/08-ai-employee-memory/`
 - **留待:M2b(Letta 自管式 + self-paging + conversation_search + Letta eval)/ M3 skills+Agent Inbox HITL / M4 MCP / M5 多员工编队**
 
-- 测试: `ANVIL_DATABASE_URL=...anvil_test uv run pytest packages/ai-employee -q`(memory/store/vectorstore/mem0/sessions/chat 需真 PG@5434;mem0/chat 用 respx mock gateway + StubEmbedder;live 需 DEEPSEEK_API_KEY)
-- 复用:P3 harness(loop+@tool+resume)、P1 知识库(Retriever/DocumentRow/FastEmbedEmbedder)、guard.structured_chat、gateway、obs
+### M2b 自管式长期记忆(Letta/MemGPT 哲学)
+
+M2a 的纯增量对照:**agent 自己调工具管记忆**(对照 mem0 编排器管)。完整实现 MemGPT 三层 core/recall/archival + self-paging。
+
+- `db.py` 新增 `ae_core_blocks`(employee+label 唯一,常驻可编辑 core 块,字符上限)
+- `memory/coreblocks.py` — `CoreBlockStore.get_all/append/replace`(惰性建 persona/human 默认块)
+- `memory/letta_tools.py` — 5 个 `@tool`(agent 自调):`core_memory_append/replace`(core 层)、`archival_insert/archival_search`(archival 层,复用 MemoryVectorStore kinds=["archival"])、`conversation_search`(recall 层,对 ae_sessions.messages 子串检索);超限/old 不存在返 ACI 失败反馈不崩
+- `memory/letta.py` — `LettaStrategy`:`build_registry` 返 5 工具、`system_prefix` 注 `<core_memory>` 块、`after_turn`=**no-op**(agent 回合内自管);**读己写最终一致**(本轮 core_memory_replace 下一轮 system 才可见,docstring 写明)
+- `chat.py` — `apply_self_paging`(≥70% 注警告系统消息诱导落盘 / ≥100% 用 M6 `compact+llm_summarizer` 递归摘要换页;全量史仍在 ae_sessions 供 conversation_search 找回)+ run_one_turn 加 `paging` 可选参 + ctx 透传 employee/session_id(纯加法,mem0/none 忽略)
+- CLI: `chat --memory letta`(make_strategy 加 letta 分支,letta 路径开 self-paging)
+- eval: `eval/memory/letta_golden.py` + `test_letta_eval` respx 录 agent 自调工具序列,断言**查库变更(真 tool_use 往返改了 DB)+ 不假设同轮可见 + self-paging 无孤儿 tool**
+- **真实验证**:live 冒烟真 deepseek **自己调记忆工具**记住"小明住上海"(`pytest packages/ai-employee/tests/test_letta_eval.py -m live`)
+- heartbeat 映射:P3 run()"继续调工具就继续、不调即 turn 结束"天然等价 Letta request_heartbeat
+- example: `examples/09-ai-employee-letta-memory/`
+- **至此 P4 三层记忆两种哲学(mem0+Letta)都实现并各有真模型验证;留待 M3 skills+Agent Inbox HITL / M4 MCP / M5 多员工**
+
+- 测试: `ANVIL_DATABASE_URL=...anvil_test uv run pytest packages/ai-employee -q`(memory/store/vectorstore/mem0/letta/coreblocks/sessions/chat 需真 PG@5434;用 respx mock gateway + StubEmbedder;live 需 DEEPSEEK_API_KEY,conftest 有真 key 就不塞 dummy)
+- 复用:P3 harness(loop+@tool+resume+context 压缩)、P1 知识库(Retriever/DocumentRow/FastEmbedEmbedder)、guard.structured_chat、gateway、obs

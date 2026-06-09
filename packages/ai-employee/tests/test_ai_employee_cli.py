@@ -38,3 +38,9 @@ async def test_make_strategy_mem0_and_none(session_factory):
     from anvil_ai_employee.memory.strategy import NoMemoryStrategy
     assert isinstance(make_strategy("none", session_factory, "deepseek-chat"), NoMemoryStrategy)
     assert isinstance(make_strategy("mem0", session_factory, "deepseek-chat"), Mem0Strategy)
+
+
+async def test_make_strategy_letta(session_factory):
+    from anvil_ai_employee.cli import make_strategy
+    from anvil_ai_employee.memory.letta import LettaStrategy
+    assert isinstance(make_strategy("letta", session_factory, "deepseek-chat"), LettaStrategy)
