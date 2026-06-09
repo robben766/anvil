@@ -94,3 +94,19 @@ hand-rolled RAG pipeline:chunker / fastembed / PgVectorStore(pgvector) / Retriev
 - `swebench --docker`(M5)— 每实例在 Docker 容器内隔离装依赖再跑:SweInstance 带 `image`(默认 python:3.11,含 gcc/git)+ `install_cmd`(如 `pip install -e .`);solve_task 的 `image`/`setup_cmd` 参在容器起来后先装仓依赖(失败即报错),再 agent 容器内跑 + 容器内 verify。把"依赖地狱"关进容器,是真跑官方 SWE-bench Lite 的前提(不造官方预构建镜像,临场装)
 - `context.compact` 摘要 tier(M6)— 截断后仍超预算时,把"中间回合"整段替换成一条 LLM 摘要(`llm_summarizer(model)`,gateway 实现),替换边界对齐非 tool 消息保 tool_use 配对;step/run 加 `summarizer` 可选参(默认 None=只截断)
 - `repo_map` 符号级排名(M6)— 每文件符号按全仓被引次数降序(枢纽符号优先)+ 每文件 top-K(`max_symbols_per_file`),比 M2 的文件级更细
+
+## anvil-ai-employee (packages/ai-employee)
+
+AI 员工(圈3 集大成,P4):cron 定时唤醒员工 → PG 队列 → worker 复用 P3 harness 跑 agent 循环 → 产出 + 写长期记忆。**M1「知识库周报员」** 是最小垂直骨架,串起前三个产品。
+
+- `db.py` — 三表:`ae_schedules`(cron 计划)/ `ae_jobs`(PG 队列载体)/ `ae_memories`(最小长期记忆,M1 只存 `report_marker`,含单调 `seq` Identity 列保排序);复用 anvil_kb 的 `make_engine`/`make_session_factory`(一个 ANVIL_DATABASE_URL,一个 PG)
+- `scheduler/queue.py` — PG 原生队列:`enqueue`/`claim_one`(`SELECT … FOR UPDATE SKIP LOCKED`,多 worker 不抢同一 job)/`complete`/`fail`,**无 Redis**
+- `scheduler/trigger.py` — `Trigger` Protocol + `CronTrigger.due(now)`(croniter;插 job 与推进 `next_run_at` 同一事务原子提交);webhook/on-demand 触发可后续扩展不动 worker
+- `memory/store.py` — `MemoryStore.write/last`(按 `seq` 降序取最新;M1 纯 recency 无向量,向量召回是 M2)
+- `tools.py` — 周报员 ACI(P3 `@tool` 协议,**同步** fn):`recall_marker`/`kb_recent`(查 kb_documents)/`kb_search`(复用 P1 `Retriever` dense 模式)/`submit_report`(终止工具);工具内访问异步 DB/检索经 `asyncbridge.block_on`(ThreadPoolExecutor+asyncio.run,复用 code-agent M6 桥)
+- `skills/kb_digest.py` — 技能 = persona(中文 system prompt 五步走)+ `build_registry(ctx)`
+- `worker.py` — `run_once`:claim → 按 skill 取 registry → 跑 `anvil_code_agent.harness.run` → submit_report 已 complete job,worker 兜底 fail;整段包 obs span,单 job 异常隔离
+- CLI: `anvil-ai-employee add-schedule --cron "0 9 * * 1" / tick [--loop] / work [--loop] / run-now / report --job <id>`
+- 测试: `ANVIL_DATABASE_URL=...anvil_test uv run pytest packages/ai-employee -q`(queue/trigger/memory/tools/worker 需真 PG@5434;worker 用 respx mock gateway;conftest 的 engine fixture 同时建 ae 表 + kb 表,autouse `_gateway_env` 配 gateway);live 冒烟需 DEEPSEEK_API_KEY
+- 复用:P3 harness(loop+@tool)、P1 知识库(Retriever/DocumentRow)、gateway(tool_use)、obs(span)
+- M1 范围:单触发(cron)+ 单技能(周报员)+ 最小记忆;**M2 三层记忆(mem0+Letta)/ M3 Agent Inbox HITL / M4 MCP 连接器 / M5 多员工编队** 未做
