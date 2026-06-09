@@ -33,7 +33,9 @@ def _origin(tmp_path):
                 ["git", "config", "user.name", "t"], ["git", "add", "."],
                 ["git", "commit", "-qm", "init"]):
         subprocess.run(cmd, cwd=p, check=True)
-    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=p, capture_output=True, text=True).stdout.strip()
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=p, capture_output=True, text=True
+    ).stdout.strip()
     return p, sha
 
 

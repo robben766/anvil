@@ -36,7 +36,10 @@ def build_parser() -> argparse.ArgumentParser:
     w.add_argument("--workdir", default="/tmp/anvil-swebench", help="dir to clone repos into")
     w.add_argument("--model", default="deepseek-chat")
     w.add_argument("--max-steps", type=int, default=40)
-    w.add_argument("--docker", action="store_true", help="run each instance in a Docker sandbox (installs deps in-container)")
+    w.add_argument(
+        "--docker", action="store_true",
+        help="run each instance in a Docker sandbox (installs deps in-container)",
+    )
     return p
 
 
