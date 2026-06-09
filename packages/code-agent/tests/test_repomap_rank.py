@@ -27,3 +27,16 @@ def test_dangling_node_redistributes():
 
 def test_empty_graph():
     assert pagerank({}) == {}
+
+
+def test_all_zero_weights_returns_uniform():
+    # When all edge weights are zero, out_weight is 0 for all nodes so every node
+    # is dangling — the convergence path still works, but the total must be non-zero.
+    # With all-zero weights the guard must prevent a division-by-zero.
+    pr = pagerank({"A": {"B": 0.0}, "B": {}})
+    assert pr is not None
+    total = sum(pr.values())
+    assert total == pytest.approx(1.0, abs=1e-6)
+    # Both values must be finite and positive
+    assert pr["A"] > 0
+    assert pr["B"] > 0

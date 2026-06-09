@@ -24,3 +24,21 @@ def test_build_respects_char_budget(tmp_path):
 
 def test_build_handles_empty_filelist(tmp_path):
     assert build_repo_map(str(tmp_path), [], max_chars=2000) == ""
+
+
+def test_build_head_truncated_when_single_file_exceeds_budget(tmp_path):
+    # One file with many defs that overflows a small budget.
+    # The renderer must NOT return just the truncation marker; it must emit
+    # the file's path header plus at least one def name, and stay within a
+    # loose bound.
+    defs = "\n".join(f"def func{i}(): pass" for i in range(100))
+    (tmp_path / "big.py").write_text(defs + "\n")
+    text = build_repo_map(str(tmp_path), ["big.py"], max_chars=100)
+    # Must contain the file header
+    assert "big.py" in text
+    # Must contain at least one def name
+    assert "func0" in text
+    # Must contain the truncation marker
+    assert "truncated" in text
+    # Must stay within a loose length bound
+    assert len(text) <= 100 + 80
