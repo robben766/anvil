@@ -13,12 +13,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from anvil_ai_employee.db import JobRow
+from anvil_ai_employee.fleet.team import EMPLOYEES
 from anvil_ai_employee.scheduler.queue import claim_one, fail
-from anvil_ai_employee.skills import kb_digest
 from anvil_ai_employee.tools import EmployeeContext
-
-SKILLS = {"kb_digest": (kb_digest.PERSONA, kb_digest.build_registry)}
-TASK_PROMPT = "现在开始产出本期知识库周报。"
 
 
 async def _job_status(session_factory, job_id) -> str:
@@ -40,17 +37,21 @@ async def run_once(
         return False
     with span("ai_employee.job", skill=job.skill, worker=worker_id):
         try:
-            if job.skill not in SKILLS:
-                await fail(session_factory, job.id, error=f"unknown skill: {job.skill}")
+            employee_name = job.employee or "kb_reporter"
+            emp = EMPLOYEES.get(employee_name)
+            if emp is None:
+                await fail(
+                    session_factory, job.id, error=f"unknown employee: {employee_name}"
+                )
                 return True
-            persona, build_registry = SKILLS[job.skill]
             ctx = EmployeeContext(
-                session_factory=session_factory, employee="kb_reporter", job_id=job.id
+                session_factory=session_factory, employee=employee_name, job_id=job.id
             )
-            registry = build_registry(ctx)
+            registry = emp.build_registry(ctx)
+            task = job.payload.get("task") or emp.task_prompt
             with tempfile.TemporaryDirectory() as workdir:
                 state = AgentState.new(
-                    system=persona, task=TASK_PROMPT, workdir=workdir, max_steps=max_steps
+                    system=emp.persona, task=task, workdir=workdir, max_steps=max_steps
                 )
                 tc = ToolContext(workdir=workdir)
                 await agent_run(state, model, registry, tc)
