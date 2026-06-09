@@ -1,5 +1,5 @@
 import pytest
-from anvil_ai_employee.db import JobRow  # noqa: E402
+from anvil_ai_employee.db import JobRow
 from sqlalchemy import select
 
 pytestmark = pytest.mark.asyncio
