@@ -1,7 +1,8 @@
-"""anvil-ai-employee CLI: add-schedule / tick / work / run-now / report.
+"""anvil-ai-employee CLI: add-schedule / tick / work / run-now / report / chat.
 
 The cron *ticker* (`tick`) and the *worker* (`work`) are separate processes — system
-cron can call `tick`, or run `tick --loop` / `work --loop` as long-running daemons."""
+cron can call `tick`, or run `tick --loop` / `work --loop` as long-running daemons.
+The `chat` subcommand starts an interactive REPL backed by the given memory strategy."""
 
 from __future__ import annotations
 
@@ -15,8 +16,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from anvil_ai_employee.db import JobRow, ScheduleRow, make_session_factory
+from anvil_ai_employee.memory.mem0 import Mem0Strategy
+from anvil_ai_employee.memory.strategy import NoMemoryStrategy
 from anvil_ai_employee.scheduler.queue import enqueue
 from anvil_ai_employee.scheduler.trigger import CronTrigger
+from anvil_ai_employee.sessions import SessionStore
 from anvil_ai_employee.worker import run_once
 
 
@@ -74,6 +78,22 @@ async def _work_loop(
             await asyncio.sleep(interval)
 
 
+_DEFAULT_PERSONA = (
+    "你是一个有长期记忆的私人助理,会记住用户告诉你的事并在以后用上。"
+)
+
+
+def make_strategy(name: str, sf: async_sessionmaker[AsyncSession], model: str):
+    """Pure factory: name ∈ {"none", "mem0"} → concrete MemoryStrategy instance."""
+    if name == "none":
+        return NoMemoryStrategy()
+    if name == "mem0":
+        from anvil_kb.embed import FastEmbedEmbedder
+
+        return Mem0Strategy(sf, embedder=FastEmbedEmbedder(), model=model)
+    raise ValueError(f"Unknown memory strategy: {name!r}")
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="anvil-ai-employee")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -97,6 +117,12 @@ def main() -> None:
     rp = sub.add_parser("report")
     rp.add_argument("--job", required=True)
 
+    ch = sub.add_parser("chat")
+    ch.add_argument("--employee", default="assistant")
+    ch.add_argument("--memory", default="mem0", choices=["none", "mem0"])
+    ch.add_argument("--model", default="deepseek-chat")
+    ch.add_argument("--persona", default=_DEFAULT_PERSONA)
+
     args = p.parse_args()
     sf = make_session_factory()  # reads ANVIL_DATABASE_URL
 
@@ -112,3 +138,16 @@ def main() -> None:
         print(f"job {jid} enqueued")
     elif args.cmd == "report":
         print(asyncio.run(show_report(sf, job_id=uuid.UUID(args.job))))
+    elif args.cmd == "chat":
+        from anvil_ai_employee.chat import chat_repl
+
+        strategy = make_strategy(args.memory, sf, args.model)
+        asyncio.run(
+            chat_repl(
+                persona=args.persona,
+                strategy=strategy,
+                employee=args.employee,
+                model=args.model,
+                session_store=SessionStore(sf),
+            )
+        )

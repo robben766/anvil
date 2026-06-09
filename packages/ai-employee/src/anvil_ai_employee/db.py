@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import BigInteger, Boolean, DateTime, Identity, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -53,11 +54,32 @@ class JobRow(Base):
 class MemoryRow(Base):
     __tablename__ = "ae_memories"
 
+    # Invariant (enforced by app layer, not DB constraint):
+    #   kind in {"fact", "archival"}  => embedding NOT NULL  (used for vector recall)
+    #   kind in {"core", "report_marker"} => embedding NULL  (no recall needed)
+
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     seq: Mapped[int] = mapped_column(BigInteger, Identity(), nullable=False)
     employee: Mapped[str] = mapped_column(Text, nullable=False)
     kind: Mapped[str] = mapped_column(Text, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    # EMBEDDING_DIM=512, consistent with anvil_kb.db.EMBEDDING_DIM
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(512), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class SessionRow(Base):
+    __tablename__ = "ae_sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    employee: Mapped[str] = mapped_column(Text, nullable=False)
+    messages: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="active")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )

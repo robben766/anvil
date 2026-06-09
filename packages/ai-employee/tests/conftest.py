@@ -8,7 +8,10 @@ import pytest_asyncio
 def _gateway_env(monkeypatch):
     """Worker tests drive the gateway under respx mock — it still needs a key + a
     configured ledger DB. Mirrors packages/code-agent/tests/conftest.py."""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "k1")
+    # Only inject a dummy key when no real one is present — respx-mocked tests never
+    # hit the network, but @pytest.mark.live tests need the real key to survive.
+    if not os.environ.get("DEEPSEEK_API_KEY"):
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "k1")
     from anvil_gateway import configure
 
     configure(

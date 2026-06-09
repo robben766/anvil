@@ -30,3 +30,11 @@ async def test_show_report_for_missing_job(session_factory):
     import uuid
     out = await show_report(session_factory, job_id=uuid.uuid4())
     assert "未找到" in out or "not found" in out.lower()
+
+
+async def test_make_strategy_mem0_and_none(session_factory):
+    from anvil_ai_employee.cli import make_strategy
+    from anvil_ai_employee.memory.mem0 import Mem0Strategy
+    from anvil_ai_employee.memory.strategy import NoMemoryStrategy
+    assert isinstance(make_strategy("none", session_factory, "deepseek-chat"), NoMemoryStrategy)
+    assert isinstance(make_strategy("mem0", session_factory, "deepseek-chat"), Mem0Strategy)

@@ -109,4 +109,24 @@ AI 员工(圈3 集大成,P4):cron 定时唤醒员工 → PG 队列 → worker �
 - CLI: `anvil-ai-employee add-schedule --cron "0 9 * * 1" / tick [--loop] / work [--loop] / run-now / report --job <id>`
 - 测试: `ANVIL_DATABASE_URL=...anvil_test uv run pytest packages/ai-employee -q`(queue/trigger/memory/tools/worker 需真 PG@5434;worker 用 respx mock gateway;conftest 的 engine fixture 同时建 ae 表 + kb 表,autouse `_gateway_env` 配 gateway);live 冒烟需 DEEPSEEK_API_KEY
 - 复用:P3 harness(loop+@tool)、P1 知识库(Retriever/DocumentRow)、gateway(tool_use)、obs(span)
-- M1 范围:单触发(cron)+ 单技能(周报员)+ 最小记忆;**M2 三层记忆(mem0+Letta)/ M3 Agent Inbox HITL / M4 MCP 连接器 / M5 多员工编队** 未做
+- M1 范围:单触发(cron)+ 单技能(周报员)+ 最小记忆
+
+### M2a 抽取式长期记忆(mem0 哲学)
+
+把 M1 的最小 report_marker 升级成三层记忆里的 session + longterm-fact 两层。**mem0 哲学=编排器管记忆,agent 不知记忆存在**(对照 M2b 的 Letta 自管式)。经 5 人评审团评审后拆出(原"双后端整套"→ M2a mem0 先发 / M2b Letta 后发;skills-as-markdown 移 M3),8 条必修已并入。
+
+- `memory/strategy.py` — `MemoryStrategy` 协议(三钩子 build_registry/system_prefix/after_turn,mem0 与 Letta 共用)+ `NoMemoryStrategy` 基线
+- `memory/mem0.py` — `Mem0Strategy`:`system_prefix`(embed_query 向量召回注入 system)+ `after_turn`(LLM extract → 逐事实找近邻 → structured_chat reconcile **ADD/UPDATE/DELETE/NOOP** → 写库)。**embed 方向铁律**:写库 embed_texts(passage)、召回/近邻 embed_query;reconcile op Python 侧校验非法当 NOOP;抽取/比对失败记 obs 不崩对话
+- `memory/vectorstore.py` — `MemoryVectorStore.knn`(对 ae_memories 的 cosine 检索,**按 employee+kind 过滤**;PgVectorStore 硬绑 ChunkRow 不可复用,故新建)
+- `memory/store.py` — M1 的 MemoryStore 扩 insert/update/delete/list_facts(保留 write/last)
+- `sessions.py` — `SessionStore` 持久化对话消息(ae_sessions,跨会话续聊)
+- `chat.py` — `run_one_turn`(每轮:system_prefix→from_messages→run→取末条 assistant→after_turn,history 不含 system)+ `chat_repl`
+- `code-agent state.py` 加 `AgentState.resume/from_messages`(纯加法,对话每轮一次性子运行,max_steps 每轮重置)
+- CLI: `anvil-ai-employee chat --memory mem0|none [--employee --model --persona]`
+- eval: `eval/memory/golden.py`(北京→上海 fixture)+ 5 类**分层查库断言**(召回层/决策层/NOOP/跨会话/embed 方向,全查 ae_memories 不查回复)
+- **真实验证**:live 冒烟(真 deepseek + 真 bge)跑北京→上海,真模型 reconcile 确实 UPDATE 不 double-ADD(`pytest packages/ai-employee -m live`,需 DEEPSEEK_API_KEY;conftest 已改成有真 key 就不塞 dummy)
+- example: `examples/08-ai-employee-memory/`
+- **留待:M2b(Letta 自管式 + self-paging + conversation_search + Letta eval)/ M3 skills+Agent Inbox HITL / M4 MCP / M5 多员工编队**
+
+- 测试: `ANVIL_DATABASE_URL=...anvil_test uv run pytest packages/ai-employee -q`(memory/store/vectorstore/mem0/sessions/chat 需真 PG@5434;mem0/chat 用 respx mock gateway + StubEmbedder;live 需 DEEPSEEK_API_KEY)
+- 复用:P3 harness(loop+@tool+resume)、P1 知识库(Retriever/DocumentRow/FastEmbedEmbedder)、guard.structured_chat、gateway、obs
