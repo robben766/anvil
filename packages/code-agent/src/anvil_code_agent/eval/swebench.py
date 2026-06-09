@@ -6,7 +6,6 @@ official per-instance Docker harness — environment build is the benchmark's ow
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 from dataclasses import dataclass, field
 

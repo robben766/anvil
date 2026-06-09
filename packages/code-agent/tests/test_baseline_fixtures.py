@@ -16,14 +16,18 @@ def test_baseline_jsonl_loads_multifile_tasks():
 def _fails_before_passes_after(tmp_path, fixture, bug, fix):
     dst = tmp_path / fixture
     shutil.copytree(GOLDEN / "fixtures" / fixture, dst)
-    before = subprocess.run(["python", "-m", "pytest", "-q"], cwd=dst, capture_output=True, text=True)
+    before = subprocess.run(
+        ["python", "-m", "pytest", "-q"], cwd=dst, capture_output=True, text=True
+    )
     assert before.returncode != 0  # 带 bug → 失败
     # 在所有 .py 里把 bug 改成 fix
     for py in dst.rglob("*.py"):
         txt = py.read_text()
         if bug in txt:
             py.write_text(txt.replace(bug, fix))
-    after = subprocess.run(["python", "-m", "pytest", "-q"], cwd=dst, capture_output=True, text=True)
+    after = subprocess.run(
+        ["python", "-m", "pytest", "-q"], cwd=dst, capture_output=True, text=True
+    )
     assert after.returncode == 0  # 修后 → 通过
 
 

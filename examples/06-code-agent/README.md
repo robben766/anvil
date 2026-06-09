@@ -33,3 +33,19 @@ agent 现在能自己定位代码,不靠人喂文件:
 - **权限门**:工具按风险分三档(low/medium/high,未知按 high 安全默认),审批策略是 `(name,args,risk)->bool` 回调;eval 用 auto_approve,交互可换成对 high 风险要人批的门。被拦的工具不执行、转成模型反馈。
 - **Docker 沙箱**:`DockerSandbox` 用 docker CLI 起容器、bind-mount workdir,bash 经 `ToolContext.executor` 路由进容器执行——跑任意 shell 才真正进程级隔离(host 子进程是默认回退)。
 - **断点恢复**:AgentState 全是普通 dict,`dump_state`/`load_state` 一行落盘/重载,崩溃或主动暂停后可 resume(12-Factor #6)。
+
+## CA-M4:SWE-bench 基线
+
+**本地可复现基线**(三个 bug-fix 任务,后两个多文件):
+```bash
+export ANVIL_DATABASE_URL=postgresql+asyncpg://anvil:anvil@localhost:5434/anvil
+uv run anvil-code-agent eval --dataset packages/code-agent/src/anvil_code_agent/eval/golden/baseline.jsonl
+```
+真实跑分:**pass@1 = <RATE>(<N>/3)**(deepseek-chat 驱动)。
+
+**接官方 SWE-bench Lite**(live,拉真实仓):
+```bash
+# 取官方实例 jsonl(princeton-nlp/SWE-bench_Lite),然后:
+uv run anvil-code-agent swebench --dataset swebench_lite.jsonl --limit 5
+```
+适配器做的事:clone 仓到 base_commit → `git apply` test_patch 并提交(失败测试进 HEAD)→ agent 修 → 跑 FAIL_TO_PASS 判定 pass@1。**刻意不重造官方每实例 Docker 环境构建**——那是 SWE-bench 自己的 harness 范畴;本里程碑触底的是"problem statement → agent → FAIL_TO_PASS 判定"这条评测范式。
