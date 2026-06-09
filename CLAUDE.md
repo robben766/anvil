@@ -144,5 +144,21 @@ M2a 的纯增量对照:**agent 自己调工具管记忆**(对照 mem0 编排器�
 - example: `examples/09-ai-employee-letta-memory/`
 - **至此 P4 三层记忆两种哲学(mem0+Letta)都实现并各有真模型验证;留待 M3 skills+Agent Inbox HITL / M4 MCP / M5 多员工**
 
-- 测试: `ANVIL_DATABASE_URL=...anvil_test uv run pytest packages/ai-employee -q`(memory/store/vectorstore/mem0/letta/coreblocks/sessions/chat 需真 PG@5434;用 respx mock gateway + StubEmbedder;live 需 DEEPSEEK_API_KEY,conftest 有真 key 就不塞 dummy)
-- 复用:P3 harness(loop+@tool+resume+context 压缩)、P1 知识库(Retriever/DocumentRow/FastEmbedEmbedder)、guard.structured_chat、gateway、obs
+### M3 Agent Inbox(HITL 防跑飞)+ skills
+
+蓝图§4.5 的"防跑飞"范式:高风险动作挂起等人审批,每次干预写回长期记忆(喂 M2)。
+
+- **核心机制**:挂起点 = 最后一条 assistant 消息里尚无 tool 回复的 tool_call,AgentState 本身经 `recovery.dump_state` 完整承载;不改 P3 step()
+- `hitl.py` — `HitlDecision`(EXECUTE/SUSPEND/DENY,StrEnum)+ `suspend_high` 默认策略 + `_unanswered_tool_calls` + `hitl_step`(每步只做一件事:处理一个待答工具高风险→`finish("suspended")`/否则执行,或调一次模型,advance 只在调模型时)+ `hitl_run` + `apply_decision`(approve 原参执行/edit 新参执行/reject 注入拒绝反馈不执行/respond 注入代答不执行,`replace(status="running")` 解挂)
+- `db.py` 新增 `ae_inbox`(job_id/tool_name/tool_args/risk/state_json/status/decision/decision_payload)
+- `inbox.py` — `InboxStore.suspend/list_pending/get/resolve`(resolve 幂等 where status=pending)
+- `hitl_memory.py` — `record_intervention`(四动作各一句中文 → MemoryStore.insert kind="hitl" 带 embedding,可被 mem0 召回)
+- `inbox_resume.py` — `resume_from_inbox`:load_state→记干预→apply_decision→hitl_run 续跑(闭环)
+- `skills_loader.py` + `skills/*.md` — skills-as-markdown(三层记忆第三层,M2 砍出来的;persona 外置版本化 .md 运行时加载;hatchling 默认打包 .md 已验证)
+- CLI: `inbox list/approve/edit/reject/respond` + `run-hitl` demo
+- **真实验证**:真 deepseek 收"删日志"自己提出高风险 shell 调用→被挂起进 Inbox→reject 落 resolved+写干预记忆,整条挂起→审批→恢复在真模型走通;mock 测试覆盖四动作 + 闭环 suspend→resolve→resume→done
+- example: `examples/10-ai-employee-hitl/`
+- 留待:M4(MCP 令牌服务端托管)/ M5(多员工编队);Web Inbox UI / lease 超时 reclaim / 多级审批为后续
+
+- 测试: `ANVIL_DATABASE_URL=...anvil_test uv run pytest packages/ai-employee -m "not live" -q`(全模块需真 PG@5434;respx mock gateway + StubEmbedder;**注意:live 与 mock 测试同跑会因真调用污染 respx 状态致 mock 失败——务必带 `-m "not live"`,CI 即此口径**;live 单独跑需 DEEPSEEK_API_KEY,conftest 有真 key 就不塞 dummy)
+- 复用:P3 harness(loop+@tool+resume+context 压缩+permission 风险门+recovery 挂起恢复)、P1 知识库(Retriever/DocumentRow/FastEmbedEmbedder)、guard.structured_chat、gateway、obs
