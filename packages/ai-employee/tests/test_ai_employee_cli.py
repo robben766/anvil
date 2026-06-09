@@ -44,3 +44,23 @@ async def test_make_strategy_letta(session_factory):
     from anvil_ai_employee.cli import make_strategy
     from anvil_ai_employee.memory.letta import LettaStrategy
     assert isinstance(make_strategy("letta", session_factory, "deepseek-chat"), LettaStrategy)
+
+
+async def test_inbox_list_and_resolve_helpers(session_factory):
+    # 用 InboxStore 直接造一个 pending,测 cli 的 inbox_list_text / inbox_resolve 纯函数
+    import json
+
+    from anvil_ai_employee.cli import inbox_list_text, inbox_resolve
+    from anvil_ai_employee.inbox import InboxStore
+    from anvil_code_agent.state import AgentState
+    msgs = ({"role": "system", "content": "s"}, {"role": "user", "content": "go"},
+            {"role": "assistant", "content": None, "tool_calls": [
+                {"id": "c1", "type": "function",
+                 "function": {"name": "bash", "arguments": json.dumps({"cmd": "rm"})}}]})
+    st = AgentState(messages=msgs, step=1, max_steps=10, workdir="/tmp", status="suspended")
+    iid = await InboxStore(session_factory).suspend(employee="assistant", state=st)
+    txt = await inbox_list_text(session_factory)
+    assert "bash" in txt and str(iid)[:8] in txt
+    await inbox_resolve(session_factory, inbox_id=iid, decision="reject", payload={"reason": "no"})
+    after = await inbox_list_text(session_factory)
+    assert "(空)" in after or "pending" not in after.lower()
