@@ -7,16 +7,27 @@ import json
 
 from anvil_obs import span
 
+from anvil_code_agent.harness.context import compact
+from anvil_code_agent.harness.permission import ApprovalPolicy, auto_approve, risk_level
 from anvil_code_agent.state import AgentState
 from anvil_code_agent.tools.base import ToolContext, ToolRegistry
 from anvil_gateway import chat
 
 
 async def step(
-    state: AgentState, model: str, registry: ToolRegistry, ctx: ToolContext
+    state: AgentState,
+    model: str,
+    registry: ToolRegistry,
+    ctx: ToolContext,
+    *,
+    policy: ApprovalPolicy = auto_approve,
+    token_budget: int | None = None,
 ) -> AgentState:
     """One reduce: call the model, execute any tool calls, return the new state."""
-    resp = await chat(model, list(state.messages), tools=registry.schemas())
+    msgs = list(state.messages)
+    if token_budget is not None:
+        msgs = compact(msgs, max_tokens=token_budget)
+    resp = await chat(model, msgs, tools=registry.schemas())
     assistant_msg = resp.raw["choices"][0]["message"]
     if resp.tool_calls:
         new = state.append(assistant_msg)
@@ -26,7 +37,17 @@ async def step(
                 args = json.loads(tc["function"].get("arguments") or "{}")
             except json.JSONDecodeError:
                 args = {}
-            with span("code_agent.tool", tool=name):
+            risk = risk_level(name)
+            if not policy(name, args, risk):
+                new = new.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": f"tool '{name}' denied by approval policy (risk={risk})",
+                    }
+                )
+                continue
+            with span("code_agent.tool", tool=name, risk=risk):
                 result = registry.dispatch(name, args, ctx)
             new = new.append(
                 {"role": "tool", "tool_call_id": tc["id"], "content": result.content}
@@ -37,12 +58,20 @@ async def step(
 
 
 async def run(
-    state: AgentState, model: str, registry: ToolRegistry, ctx: ToolContext
+    state: AgentState,
+    model: str,
+    registry: ToolRegistry,
+    ctx: ToolContext,
+    *,
+    policy: ApprovalPolicy = auto_approve,
+    token_budget: int | None = None,
 ) -> AgentState:
     """Drive step() until the model finishes or max_steps is hit."""
     with span("code_agent.run", model=model):
         while state.status == "running":
             if state.step >= state.max_steps:
                 return state.finish("exhausted")
-            state = await step(state, model, registry, ctx)
+            state = await step(
+                state, model, registry, ctx, policy=policy, token_budget=token_budget
+            )
         return state
