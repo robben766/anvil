@@ -7,7 +7,7 @@ from __future__ import annotations
 import uuid
 
 from anvil_obs import span
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from anvil_ai_employee.db import GoalRow, JobRow
@@ -35,14 +35,21 @@ async def aggregate(
     model: str,
 ) -> str | None:
     """Return the synthesized final result (and persist it) if all children are terminal;
-    otherwise return None without writing. Idempotent: safe to call repeatedly."""
-    if not await children_terminal(session_factory, goal_id):
-        return None
+    otherwise return None without writing. Idempotent: if the goal is already done, return
+    its stored result without re-synthesizing (no extra LLM call, no overwrite)."""
     async with session_factory() as s:
         goal = (await s.execute(select(GoalRow).where(GoalRow.id == goal_id))).scalar_one()
         children = (
             (await s.execute(select(JobRow).where(JobRow.goal_id == goal_id))).scalars().all()
         )
+    if goal.status == "done":
+        return goal.result  # already aggregated — idempotent, no re-synthesis
+    if not children:
+        # No children yet (fan_out hasn't run): NOT terminal. Avoids a vacuous "done" and
+        # the orphan-children race if status is polled between goal creation and fan_out.
+        return None
+    if not all(c.status in _TERMINAL for c in children):
+        return None
     parts = []
     for c in children:
         if c.status == "done":
@@ -60,7 +67,7 @@ async def aggregate(
         async with s.begin():
             await s.execute(
                 update(GoalRow)
-                .where(GoalRow.id == goal_id)
-                .values(status="done", result=final)
+                .where(GoalRow.id == goal_id, GoalRow.status != "done")
+                .values(status="done", result=final, finished_at=func.now())
             )
     return final

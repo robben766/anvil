@@ -72,3 +72,39 @@ async def test_aggregate_synthesizes_and_writes_result(session_factory, respx_mo
         goal = (await s.execute(select(GoalRow).where(GoalRow.id == gid))).scalar_one()
         assert goal.status == "done"
         assert goal.result == "最终综合交付物"
+        assert goal.finished_at is not None  # completion timestamp set
+
+
+async def test_aggregate_idempotent_on_done_goal_no_extra_llm_call(session_factory):
+    """A second aggregate() on an already-done goal returns the stored result WITHOUT any
+    LLM call (no respx route registered → any chat() would raise)."""
+    import uuid
+
+    from anvil_ai_employee.db import GoalRow
+    from anvil_ai_employee.fleet.aggregator import aggregate
+
+    gid = uuid.uuid4()
+    async with session_factory() as s:
+        async with s.begin():
+            s.add(GoalRow(id=gid, objective="g", status="done", result="已有结论"))
+    out = await aggregate(session_factory, gid, model="deepseek-chat")
+    assert out == "已有结论"  # returned stored result, never called the model
+
+
+async def test_aggregate_returns_none_when_no_children(session_factory):
+    """Goal exists but fan_out hasn't run yet → not terminal → no vacuous 'done'."""
+    import uuid
+
+    from anvil_ai_employee.db import GoalRow
+    from anvil_ai_employee.fleet.aggregator import aggregate
+
+    gid = uuid.uuid4()
+    async with session_factory() as s:
+        async with s.begin():
+            s.add(GoalRow(id=gid, objective="g", status="running"))
+    assert await aggregate(session_factory, gid, model="deepseek-chat") is None
+    async with session_factory() as s:
+        from sqlalchemy import select
+
+        goal = (await s.execute(select(GoalRow).where(GoalRow.id == gid))).scalar_one()
+        assert goal.status == "running"  # NOT flipped to done
