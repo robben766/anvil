@@ -30,6 +30,8 @@ class SweInstance:
     test_patch: str
     fail_to_pass: list[str]
     pass_to_pass: list[str] = field(default_factory=list)
+    image: str = "python:3.11"
+    install_cmd: str = ""
 
 
 def load_instances(path: str) -> list[SweInstance]:
@@ -49,6 +51,8 @@ def load_instances(path: str) -> list[SweInstance]:
                     test_patch=d.get("test_patch", ""),
                     fail_to_pass=_as_list(d.get("FAIL_TO_PASS", [])),
                     pass_to_pass=_as_list(d.get("PASS_TO_PASS", [])),
+                    image=d.get("image", "python:3.11"),
+                    install_cmd=d.get("install_cmd", ""),
                 )
             )
     return out

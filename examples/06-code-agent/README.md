@@ -49,3 +49,14 @@ uv run anvil-code-agent eval --dataset packages/code-agent/src/anvil_code_agent/
 uv run anvil-code-agent swebench --dataset swebench_lite.jsonl --limit 5
 ```
 适配器做的事:clone 仓到 base_commit → `git apply` test_patch 并提交(失败测试进 HEAD)→ agent 修 → 跑 FAIL_TO_PASS 判定 pass@1。**刻意不重造官方每实例 Docker 环境构建**——那是 SWE-bench 自己的 harness 范畴;本里程碑触底的是"problem statement → agent → FAIL_TO_PASS 判定"这条评测范式。
+
+## CA-M5:Docker 化(容器内装依赖)
+
+真实 SWE-bench 仓各有各的依赖,host 上 ad-hoc 装会互相打架/装不上。CA-M5 把每个实例关进一个容器:
+
+```bash
+# 实例 jsonl 每行可带 "image" 和 "install_cmd";--docker 启用容器隔离
+uv run anvil-code-agent swebench --dataset swebench_lite.jsonl --limit 5 --docker
+```
+
+容器内流程:起 `image` 容器(默认 python:3.11,带编译工具)→ `install_cmd` 装这个仓的依赖(editable,这样 agent 改源即时生效)→ agent 在容器内读写/跑测试 → 容器内跑 FAIL_TO_PASS。装不上的实例如实报 `docker setup failed`,与"代码没修对"区分开。**刻意不造官方每实例预构建镜像**——临场容器装依赖,够拿到一个诚实的真实 pass@1。

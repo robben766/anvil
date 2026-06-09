@@ -91,3 +91,4 @@ hand-rolled RAG pipeline:chunker / fastembed / PgVectorStore(pgvector) / Retriev
 - `eval/swebench.py`(M4)— SWE-bench(-Lite)实例适配器:SweInstance/load_instances(兼容 HF json-string 字段)/fetch_repo(clone@base_commit)/apply_test_patch(git apply 并提交,让 worktree HEAD 含失败测试)/instance_to_task(verify=跑 FAIL_TO_PASS)/prepare_instance(全链);**不重造官方 Docker harness**
 - `eval/golden/baseline.jsonl`(M4)— calc/strops/counter 三个 bug-fix 任务(后两个多文件,逼 agent 用 repo_map/grep 定位)
 - CLI: `anvil-code-agent eval --dataset .../baseline.jsonl`(本地基线 pass@1)/ `anvil-code-agent swebench --dataset <instances.jsonl> [--limit N]`(官方实例,clone 真实仓,live)
+- `swebench --docker`(M5)— 每实例在 Docker 容器内隔离装依赖再跑:SweInstance 带 `image`(默认 python:3.11,含 gcc/git)+ `install_cmd`(如 `pip install -e .`);solve_task 的 `image`/`setup_cmd` 参在容器起来后先装仓依赖(失败即报错),再 agent 容器内跑 + 容器内 verify。把"依赖地狱"关进容器,是真跑官方 SWE-bench Lite 的前提(不造官方预构建镜像,临场装)
