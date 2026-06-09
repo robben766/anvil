@@ -16,6 +16,7 @@ from anvil_code_agent.sandbox import Worktree
 from anvil_code_agent.state import AgentState
 from anvil_code_agent.tools.base import ToolContext, ToolRegistry
 from anvil_code_agent.tools.fs import edit_file, read_file
+from anvil_code_agent.tools.search import grep, repo_map
 from anvil_code_agent.tools.shell import bash
 from anvil_code_agent.tools.verify import run_tests
 
@@ -34,7 +35,7 @@ class RunResult:
 
 
 def default_registry() -> ToolRegistry:
-    return ToolRegistry([read_file, edit_file, bash, run_tests])
+    return ToolRegistry([read_file, edit_file, bash, run_tests, repo_map, grep])
 
 
 @contextmanager

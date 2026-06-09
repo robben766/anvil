@@ -77,6 +77,7 @@ hand-rolled RAG pipeline:chunker / fastembed / PgVectorStore(pgvector) / Retriev
 
 - `harness/loop.py` — `step()` 一次 tool_use 往返;`run()` while 循环 + max_steps 守护
 - `tools/` — read_file / edit_file(SEARCH-REPLACE+护栏)/ bash(超时截断)/ run_tests(闭环)
+- `repo_map` / `grep`(M2)— tree-sitter+手写 PageRank 排序的符号地图 + 纯 Python regex 搜索,让 agent 自己定位代码
 - `sandbox.py` — git worktree 隔离,可 diff 可丢弃
 - `eval/` — Task + runner(worktree→agent→verify)+ pass 率;fixture: calc bug-fix
 - CLI: `anvil-code-agent solve --repo <r> --prompt "<p>"` / `anvil-code-agent eval --dataset <tasks.jsonl>`
