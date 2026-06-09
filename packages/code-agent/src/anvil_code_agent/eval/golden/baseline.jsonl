@@ -1,0 +1,3 @@
+{"id": "calc-add", "repo": "fixtures/calc", "prompt": "The test_add test is failing. Find and fix the bug in calc.py, then run the tests until they pass.", "verify_cmd": "python -m pytest -q"}
+{"id": "strops-upper", "repo": "fixtures/strops", "prompt": "test_shout is failing. The shout() function should upper-case its input and append '!'. Locate the function across the package, fix it, and make the tests pass.", "verify_cmd": "python -m pytest -q"}
+{"id": "counter-evens", "repo": "fixtures/counter", "prompt": "test_count_evens is failing. count_evens should count EVEN numbers. Find the bug in the package and fix it until tests pass.", "verify_cmd": "python -m pytest -q"}

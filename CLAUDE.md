@@ -88,3 +88,6 @@ hand-rolled RAG pipeline:chunker / fastembed / PgVectorStore(pgvector) / Retriev
 - `harness/recovery.py`(M3)— AgentState ↔ JSON dump/load,断点落盘可 resume
 - `sandbox.py` DockerSandbox(M3)— docker CLI 起容器,workdir bind-mount 到 /work,`exec()` 容器内执行;`ToolContext.executor` 接缝让 bash 路由进容器(host 为默认回退)
 - step/run 加 `policy`/`token_budget` 可选参,默认保持 M1 行为
+- `eval/swebench.py`(M4)— SWE-bench(-Lite)实例适配器:SweInstance/load_instances(兼容 HF json-string 字段)/fetch_repo(clone@base_commit)/apply_test_patch(git apply 并提交,让 worktree HEAD 含失败测试)/instance_to_task(verify=跑 FAIL_TO_PASS)/prepare_instance(全链);**不重造官方 Docker harness**
+- `eval/golden/baseline.jsonl`(M4)— calc/strops/counter 三个 bug-fix 任务(后两个多文件,逼 agent 用 repo_map/grep 定位)
+- CLI: `anvil-code-agent eval --dataset .../baseline.jsonl`(本地基线 pass@1)/ `anvil-code-agent swebench --dataset <instances.jsonl> [--limit N]`(官方实例,clone 真实仓,live)

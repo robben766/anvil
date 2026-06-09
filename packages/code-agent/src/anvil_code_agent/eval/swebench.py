@@ -1,0 +1,125 @@
+"""Adapt a SWE-bench(-Lite) instance to anvil's bug-fix Task: clone the repo at
+base_commit, git-apply the test_patch (which adds the failing tests) and commit it so a
+worktree's HEAD carries it, then verify the FAIL_TO_PASS tests. We do NOT reproduce the
+official per-instance Docker harness — environment build is the benchmark's own concern."""
+
+from __future__ import annotations
+
+import json
+import os
+import shlex
+import shutil
+import subprocess
+from dataclasses import dataclass, field
+
+from anvil_code_agent.eval.task import Task
+
+
+def _as_list(v: object) -> list[str]:
+    if isinstance(v, str):
+        return list(json.loads(v))
+    return list(v) if v else []
+
+
+@dataclass
+class SweInstance:
+    instance_id: str
+    repo: str
+    base_commit: str
+    problem_statement: str
+    test_patch: str
+    fail_to_pass: list[str]
+    pass_to_pass: list[str] = field(default_factory=list)
+
+
+def load_instances(path: str) -> list[SweInstance]:
+    out: list[SweInstance] = []
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            d = json.loads(line)
+            out.append(
+                SweInstance(
+                    instance_id=d["instance_id"],
+                    repo=d["repo"],
+                    base_commit=d["base_commit"],
+                    problem_statement=d["problem_statement"],
+                    test_patch=d.get("test_patch", ""),
+                    fail_to_pass=_as_list(d.get("FAIL_TO_PASS", [])),
+                    pass_to_pass=_as_list(d.get("PASS_TO_PASS", [])),
+                )
+            )
+    return out
+
+
+def apply_test_patch(repo_root: str, instance: SweInstance) -> None:
+    """git-apply the instance's test_patch and commit it, so a worktree checked out at
+    HEAD carries the (currently failing) tests. Raises RuntimeError if the patch fails.
+
+    --index stages exactly what the patch touches in one atomic step (all-or-nothing),
+    so partial application can't leave a half-staged state; no separate git add needed.
+    """
+    if not instance.test_patch.strip():
+        return
+    r = subprocess.run(
+        ["git", "apply", "--index", "-"],
+        cwd=repo_root,
+        input=instance.test_patch,
+        capture_output=True,
+        text=True,
+    )
+    if r.returncode != 0:
+        raise RuntimeError(f"git apply test_patch failed: {r.stderr.strip()}")
+    # Inline -c identity: a freshly-cloned repo (and CI) may have no user.name/email
+    # configured, which would make `git commit` exit 128. This keeps it self-contained.
+    subprocess.run(
+        [
+            "git",
+            "-c", "user.email=anvil@anvil.local",
+            "-c", "user.name=anvil",
+            "commit", "-q", "-m", f"apply test_patch for {instance.instance_id}",
+        ],
+        cwd=repo_root,
+        check=True,
+    )
+
+
+def instance_to_task(instance: SweInstance, repo_root: str) -> Task:
+    """Build a bug-fix Task: agent gets the problem statement; success = FAIL_TO_PASS pass."""
+    if not instance.fail_to_pass:
+        raise ValueError(
+            f"instance {instance.instance_id} has empty FAIL_TO_PASS"
+            " — cannot build a meaningful verify"
+        )
+    # shlex.quote each id so pytest node-ids containing [...] or spaces survive shell=True
+    targets = " ".join(shlex.quote(t) for t in instance.fail_to_pass)
+    return Task(
+        id=instance.instance_id,
+        repo=repo_root,
+        prompt=instance.problem_statement,
+        verify_cmd=f"python -m pytest {targets} -q",
+    )
+
+
+def fetch_repo(instance: SweInstance, dest: str, *, repo_url: str | None = None) -> None:
+    """Clone the instance repo to dest and check out base_commit. repo_url defaults to
+    GitHub (https://github.com/{repo}.git); pass a local path/URL to avoid the network.
+
+    If dest already exists (e.g. on a re-run) it is removed before cloning so that
+    git clone never fails with 'destination path already exists'."""
+    if os.path.exists(dest):
+        shutil.rmtree(dest)
+    url = repo_url or f"https://github.com/{instance.repo}.git"
+    subprocess.run(["git", "clone", "--quiet", url, dest], check=True)
+    subprocess.run(["git", "checkout", "-q", instance.base_commit], cwd=dest, check=True)
+
+
+def prepare_instance(
+    instance: SweInstance, dest: str, *, repo_url: str | None = None
+) -> Task:
+    """Full setup: fetch repo @ base_commit → apply+commit test_patch → build Task."""
+    fetch_repo(instance, dest, repo_url=repo_url)
+    apply_test_patch(dest, instance)
+    return instance_to_task(instance, dest)
