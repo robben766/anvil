@@ -10,6 +10,7 @@ from anvil_code_agent.repomap.build import build_repo_map
 from anvil_code_agent.tools.base import ToolContext, ToolResult, tool
 
 _SKIP_DIRS = {".git", "__pycache__", ".venv", "node_modules", ".pytest_cache"}
+_MAX_FILE_BYTES = 1_000_000
 
 
 @tool(
@@ -37,6 +38,12 @@ def grep(args: dict, ctx: ToolContext) -> ToolResult:
             full = os.path.join(dirpath, fn)
             rel = os.path.relpath(full, ctx.workdir)
             try:
+                if os.path.getsize(full) > _MAX_FILE_BYTES:
+                    continue
+                with open(full, "rb") as fb:
+                    chunk = fb.read(1024)
+                if b"\x00" in chunk:
+                    continue
                 with open(full, encoding="utf-8", errors="replace") as fh:
                     for i, line in enumerate(fh, 1):
                         if rx.search(line):

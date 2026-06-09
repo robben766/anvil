@@ -36,4 +36,6 @@ def pagerank(
         if delta < tol:
             break
     total = sum(rank.values())
+    if total == 0.0:
+        return {v: 1.0 / n for v in nodes}
     return {v: rank[v] / total for v in nodes}

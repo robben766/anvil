@@ -48,7 +48,22 @@ def build_repo_map(root: str, files: list[str], *, max_chars: int = 4000) -> str
         defs = sorted(file_defs.get(rel, set()))
         block = f"{rel}:\n" + "".join(f"  {d}\n" for d in defs)
         if out_len + len(block) > max_chars:
-            lines.append(f"... [repo map truncated at {max_chars} chars]")
+            if not lines:
+                # Nothing emitted yet: emit a head-truncated version of this top block
+                # so the caller always gets at least the file header + some defs.
+                header = f"{rel}:\n"
+                marker = f"... [repo map truncated at {max_chars} chars]"
+                remaining = max_chars - len(header)
+                def_lines: list[str] = []
+                for d in defs:
+                    entry = f"  {d}\n"
+                    if remaining - len(entry) < 0:
+                        break
+                    def_lines.append(entry)
+                    remaining -= len(entry)
+                lines.append(header + "".join(def_lines) + marker)
+            else:
+                lines.append(f"... [repo map truncated at {max_chars} chars]")
             break
         lines.append(block)
         out_len += len(block)
