@@ -227,20 +227,39 @@ import os
 import pytest
 import pytest_asyncio
 
-from anvil_ai_employee.db import Base, make_engine
 
-pytestmark = pytest.mark.asyncio
+@pytest.fixture(autouse=True)
+def _gateway_env(monkeypatch):
+    """Worker tests drive the gateway under respx mock — it still needs a key + a
+    configured ledger DB. Mirrors packages/code-agent/tests/conftest.py."""
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "k1")
+    from anvil_gateway import configure
+
+    configure(
+        database_url=os.environ.get(
+            "ANVIL_TEST_DATABASE_URL",
+            "postgresql+asyncpg://anvil:anvil@localhost:5434/anvil_test",
+        ),
+        retry_base_delay=0,
+    )
 
 
 @pytest_asyncio.fixture
 async def engine():
+    from anvil_ai_employee.db import Base, make_engine
+
     url = os.environ.get("ANVIL_DATABASE_URL")
     if not url:
         pytest.skip("ANVIL_DATABASE_URL not set (needs real PG@5434)")
     eng = make_engine(url)
+    # ai-employee tables + kb tables (tools read kb_documents)
+    from anvil_kb.db import Base as KbBase
+
     async with eng.begin() as conn:
+        await conn.run_sync(KbBase.metadata.drop_all)
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(KbBase.metadata.create_all)
     yield eng
     await eng.dispose()
 
@@ -251,6 +270,8 @@ async def session_factory(engine):
 
     return async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 ```
+
+> 注:engine fixture 一并建 kb 表(Task 6 的 tools 测试要用 kb_documents),Task 6 不必再改 conftest——本任务已建好。
 
 - [ ] **Step 2: 写 test_schema_create.py(冒烟:三表可建可查)**
 
@@ -943,19 +964,17 @@ def build_employee_tools(ctx: EmployeeContext) -> list[Tool]:
     return [recall_marker, kb_recent, kb_search, submit_report]
 ```
 
-- [ ] **Step 5: 更新 conftest engine fixture 建 kb 表**
-
-在 `conftest.py` 的 engine fixture 内,drop/create 既有 `Base.metadata` 之外,**也对 `anvil_kb.db.Base.metadata` 做 drop_all/create_all**(kb_documents 等)。这样 tools 测试有表可用。
-
-- [ ] **Step 6: 跑测试确认通过**
+- [ ] **Step 5: 跑测试确认通过**(conftest 已在 Task 2 建好 kb 表,无需再改)
 
 Run: `ANVIL_DATABASE_URL=... uv run pytest packages/ai-employee/tests/test_tools.py -q`
 Expected: PASS
 
-- [ ] **Step 7: Commit**
+简化 test_tools.py:删掉临时 `_kb_tables` helper(kb 表已由 conftest 建);`DocumentRow` 直接从 `anvil_kb.db` 导入,不从 ai_employee.db 再导出。
+
+- [ ] **Step 6: Commit**
 
 ```bash
-git add packages/ai-employee/src/anvil_ai_employee/asyncbridge.py packages/ai-employee/src/anvil_ai_employee/tools.py packages/ai-employee/tests/test_tools.py packages/ai-employee/tests/conftest.py
+git add packages/ai-employee/src/anvil_ai_employee/asyncbridge.py packages/ai-employee/src/anvil_ai_employee/tools.py packages/ai-employee/tests/test_tools.py
 git commit -m "feat(ai-employee): KB reporter tools (recall/kb_recent/kb_search/submit) + async bridge"
 ```
 
@@ -1056,17 +1075,25 @@ from anvil_ai_employee.worker import run_once
 
 pytestmark = pytest.mark.asyncio
 
-CHAT_URL = "https://api.deepseek.com/chat/completions"  # adjust to gateway base if needed
+CHAT_URL = "https://api.deepseek.com/v1/chat/completions"  # MUST match anvil_gateway base
 
 
 def _assistant_tool_call(tool_id, name, arguments):
-    return {"choices": [{"message": {"role": "assistant", "content": None,
+    return httpx.Response(200, json={
+        "id": "x", "model": "deepseek-chat",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": None,
             "tool_calls": [{"id": tool_id, "type": "function",
-            "function": {"name": name, "arguments": json.dumps(arguments)}}]}}]}
+            "function": {"name": name, "arguments": json.dumps(arguments)}}]},
+            "finish_reason": "tool_calls"}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5}})
 
 
 def _assistant_done():
-    return {"choices": [{"message": {"role": "assistant", "content": "完成"}}]}
+    return httpx.Response(200, json={
+        "id": "x", "model": "deepseek-chat",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "完成"},
+            "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5}})
 
 
 @respx.mock
@@ -1081,12 +1108,12 @@ async def test_run_once_executes_job_to_done(engine, session_factory, monkeypatc
 
     route = respx.post(CHAT_URL)
     route.side_effect = [
-        httpx.Response(200, json=_assistant_tool_call("c1", "recall_marker", {})),
-        httpx.Response(200, json=_assistant_tool_call("c2", "kb_recent",
-                        {"since_iso": "2026-06-01T00:00:00+00:00"})),
-        httpx.Response(200, json=_assistant_tool_call("c3", "submit_report",
-                        {"markdown": "# 周报\n- 新政策 (p.md)", "covered_until_iso": "2026-06-08T00:00:00+00:00"})),
-        httpx.Response(200, json=_assistant_done()),
+        _assistant_tool_call("c1", "recall_marker", {}),
+        _assistant_tool_call("c2", "kb_recent", {"since_iso": "2026-06-01T00:00:00+00:00"}),
+        _assistant_tool_call("c3", "submit_report",
+                             {"markdown": "# 周报\n- 新政策 (p.md)",
+                              "covered_until_iso": "2026-06-08T00:00:00+00:00"}),
+        _assistant_done(),
     ]
 
     job_id = await enqueue(session_factory, skill="kb_digest", payload={})
