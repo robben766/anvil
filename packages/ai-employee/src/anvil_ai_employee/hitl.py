@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from dataclasses import replace
 from enum import StrEnum
 from typing import Any
 
 from anvil_code_agent.harness.permission import risk_level
 from anvil_code_agent.state import AgentState
+from anvil_code_agent.tools.base import ToolContext, ToolRegistry
 from anvil_obs import span
 
 from anvil_gateway import chat
@@ -92,3 +94,25 @@ async def hitl_run(state, model, registry, ctx, *, policy: HitlPolicy = suspend_
             if state.status == "suspended":
                 return state
         return state
+
+
+def apply_decision(state, *, decision: str, payload: dict, registry: ToolRegistry,
+                   ctx: ToolContext) -> AgentState:
+    pending = _unanswered_tool_calls(state)
+    if not pending:
+        raise ValueError("apply_decision: no pending tool call in state")
+    tc = pending[0]
+    tcid = tc["id"]
+    name = tc["function"]["name"]
+    if decision == "approve":
+        content = registry.dispatch(name, _args_of(tc), ctx).content
+    elif decision == "edit":
+        content = registry.dispatch(name, payload["args"], ctx).content
+    elif decision == "reject":
+        content = f"[人工拒绝] {payload.get('reason', '')}"
+    elif decision == "respond":
+        content = payload["message"]
+    else:
+        raise ValueError(f"unknown decision: {decision}")
+    msgs = state.messages + (_tool_msg(tcid, content),)
+    return replace(state, messages=msgs, status="running")
