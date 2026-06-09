@@ -41,7 +41,7 @@ agent 现在能自己定位代码,不靠人喂文件:
 export ANVIL_DATABASE_URL=postgresql+asyncpg://anvil:anvil@localhost:5434/anvil
 uv run anvil-code-agent eval --dataset packages/code-agent/src/anvil_code_agent/eval/golden/baseline.jsonl
 ```
-真实跑分:**pass@1 = <RATE>(<N>/3)**(deepseek-chat 驱动)。
+真实跑分:**pass@1 = 100%(3/3)**(deepseek-chat 驱动;calc 4 步、strops 5 步、counter 5 步——后两个多文件任务里 agent 用 repo_map/grep 跨文件定位了 bug)。
 
 **接官方 SWE-bench Lite**(live,拉真实仓):
 ```bash
