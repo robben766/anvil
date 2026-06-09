@@ -160,5 +160,14 @@ M2a 的纯增量对照:**agent 自己调工具管记忆**(对照 mem0 编排器�
 - example: `examples/10-ai-employee-hitl/`
 - 留待:M4(MCP 令牌服务端托管)/ M5(多员工编队);Web Inbox UI / lease 超时 reclaim / 多级审批为后续
 
+### M4「MCP 连接器」(examples/11)
+
+- **自研 stdio JSON-RPC 2.0 client**(`mcp/transport.py` + `mcp/client.py`):不套 `mcp` SDK;`initialize`→`notifications/initialized`→`tools/list`→`tools/call`;stdio 帧 = 每行一个 JSON。
+- **会话生命周期坑**:MCP session 是长连接而 `@tool` 同步;`McpClient` 用**后台线程+独占 event loop** 持有子进程 transport,同步工具走 `run_coroutine_threadsafe(...).result()`(不是 M1 的 block_on——那个每次换 loop 绑不住子进程)。
+- **凭证服务端托管**(`mcp/tokens.py` + `ae_mcp_tokens` 表):密钥按 (employee, connector, env_key) 存,spawn server 时注入子进程 env;agent 的 tool args 永不含凭证;结果文本里的 token 在 client 侧脱敏成 `***`。
+- **风险→HITL 零改造**(`mcp/adapter.py` + `mcp/connector.py`):`mcp_risk` 读 annotation(readOnlyHint→low / destructiveHint 或无 hint→high / 其余 medium);`mcp_risk_policy` 喂给 M3 `hitl_run`——读类直接执行、写类挂起进 ae_inbox;`apply_decision`/inbox/干预记忆全不改。
+- 工具名命名空间 `{connector}__{tool}` 防撞车。mock server `mcp/mock_servers/email_server.py`(零依赖,reverse-validate 握手)。CLI:`mcp list-tools`/`mcp put-token`/`run-mcp [--auto-approve]`。
+- 边界:跨进程 MCP inbox resume 需重建连接器(demo 用同进程 `--auto-approve`);真 OAuth/refresh、SSE/HTTP 传输、resources/prompts 留作螺旋。
+
 - 测试: `ANVIL_DATABASE_URL=...anvil_test uv run pytest packages/ai-employee -m "not live" -q`(全模块需真 PG@5434;respx mock gateway + StubEmbedder;**注意:live 与 mock 测试同跑会因真调用污染 respx 状态致 mock 失败——务必带 `-m "not live"`,CI 即此口径**;live 单独跑需 DEEPSEEK_API_KEY,conftest 有真 key 就不塞 dummy)
 - 复用:P3 harness(loop+@tool+resume+context 压缩+permission 风险门+recovery 挂起恢复)、P1 知识库(Retriever/DocumentRow/FastEmbedEmbedder)、guard.structured_chat、gateway、obs
