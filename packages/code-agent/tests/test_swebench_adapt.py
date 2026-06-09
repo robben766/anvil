@@ -1,6 +1,12 @@
+import shlex
 import subprocess
 
-from anvil_code_agent.eval.swebench import SweInstance, apply_test_patch, instance_to_task
+import pytest
+from anvil_code_agent.eval.swebench import (
+    SweInstance,
+    apply_test_patch,
+    instance_to_task,
+)
 from anvil_code_agent.eval.task import Task
 
 TEST_PATCH = (
@@ -61,3 +67,34 @@ def test_instance_to_task_builds_failtopass_verify():
     assert t.prompt == "make f return 2"
     assert "test_m.py::test_f" in t.verify_cmd
     assert "pytest" in t.verify_cmd
+
+
+# FIX 1: empty FAIL_TO_PASS must raise ValueError
+def test_instance_to_task_raises_on_empty_fail_to_pass():
+    inst = SweInstance(
+        instance_id="empty-1",
+        repo="x/m",
+        base_commit="HEAD",
+        problem_statement="fix it",
+        test_patch="",
+        fail_to_pass=[],
+    )
+    with pytest.raises(ValueError, match="empty-1"):
+        instance_to_task(inst, "/some/repo")
+
+
+# FIX 2: node-ids with special chars must be shell-quoted in verify_cmd
+def test_instance_to_task_quotes_nodeids_with_brackets():
+    inst = SweInstance(
+        instance_id="bracket-1",
+        repo="x/m",
+        base_commit="HEAD",
+        problem_statement="fix it",
+        test_patch="",
+        fail_to_pass=["t.py::test_x[1-2]"],
+    )
+    t = instance_to_task(inst, "/some/repo")
+    quoted = shlex.quote("t.py::test_x[1-2]")
+    # The bracket must not appear bare (unquoted) in the command
+    assert quoted in t.verify_cmd
+    assert "t.py::test_x[1-2]" not in t.verify_cmd.replace(quoted, "")
