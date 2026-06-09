@@ -169,5 +169,14 @@ M2a 的纯增量对照:**agent 自己调工具管记忆**(对照 mem0 编排器�
 - 工具名命名空间 `{connector}__{tool}` 防撞车。mock server `mcp/mock_servers/email_server.py`(零依赖,reverse-validate 握手)。CLI:`mcp list-tools`/`mcp put-token`/`run-mcp [--auto-approve]`。
 - 边界:跨进程 MCP inbox resume 需重建连接器(demo 用同进程 `--auto-approve`);真 OAuth/refresh、SSE/HTTP 传输、resources/prompts 留作螺旋。
 
+### M5「多员工编队」(examples/12)
+
+- **不新建编排引擎,直接复用 M1 PG 队列**:fleet 工作分发 = `ae_jobs` + SKIP LOCKED(M1 已证多 worker 无重复领取);job 加 `goal_id`(属哪个目标)+ `employee`(指派给谁),worker 按 `employee` 选 persona/registry。多开 `work --loop` = 并行编队。
+- **supervisor**(`fleet/supervisor.py`):`decompose` 用 `guard.structured_chat` 把目标拆成独立子任务(非法/空→兜底单任务,绝不空转);`fan_out` 逐个 `enqueue`(带 goal_id+employee)。
+- **aggregator**(`fleet/aggregator.py`):`children_terminal` 判全 done/failed;`aggregate` 综合各产出写 `ae_goals.result`,**失败子任务也纳入并标注缺失**(ACI 延伸到编队层),未全终态返 None、幂等。
+- **team**(`fleet/team.py`):`EMPLOYEES` 注册表(kb_reporter 周报员 + researcher 调研员,角色异构);worker 泛化按 `job.employee` 选员工,`job.payload['task']` 作子任务(fallback 保 M1 行为)。
+- 存储:`ae_goals` 表 + `JobRow.goal_id/employee`(nullable,M1-M4 单 job 路径不破)。CLI `team run --goal`/`team status --goal`。M2/M3/M4 员工天然可作编队成员。
+- 边界:子任务 DAG 依赖、员工间消息/协商、动态扩缩容、陪审团择优综合留作螺旋。**至此 P4 与四产品主体全部完成。**
+
 - 测试: `ANVIL_DATABASE_URL=...anvil_test uv run pytest packages/ai-employee -m "not live" -q`(全模块需真 PG@5434;respx mock gateway + StubEmbedder;**注意:live 与 mock 测试同跑会因真调用污染 respx 状态致 mock 失败——务必带 `-m "not live"`,CI 即此口径**;live 单独跑需 DEEPSEEK_API_KEY,conftest 有真 key 就不塞 dummy)
 - 复用:P3 harness(loop+@tool+resume+context 压缩+permission 风险门+recovery 挂起恢复)、P1 知识库(Retriever/DocumentRow/FastEmbedEmbedder)、guard.structured_chat、gateway、obs
