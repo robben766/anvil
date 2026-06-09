@@ -91,8 +91,18 @@ async def solve_task(
                         system=SYSTEM_PROMPT, task=task.prompt, workdir=wt.path, max_steps=max_steps
                     )
                     final = await run(state, model, default_registry(), ctx)
-                    # Ensure test dependencies (pytest) are available inside the container
-                    box.exec("pip install -q pytest")
+                    # Ensure test dependencies (pytest) are available inside the container.
+                    # If install fails (e.g. no network), raise immediately so the caller
+                    # sees an infra error rather than a silent test-failure.
+                    pip_rc, pip_out = box.exec("pip install -q pytest")
+                    if pip_rc != 0:
+                        raise RuntimeError(
+                            f"docker setup failed: pip install pytest rc={pip_rc}: {pip_out[:200]}"
+                        )
+                    # Note: the container runs as root, so files written into the
+                    # bind-mounted worktree are root-owned (acceptable for throwaway
+                    # worktrees; a future hardening is to pass --user to `docker run`).
+                    # verify runs in-container; wt.diff() runs on the host.
                     rc, out = box.exec(task.verify_cmd)
                     return RunResult(
                         task_id=task.id, passed=rc == 0, steps=final.step, diff=wt.diff()
