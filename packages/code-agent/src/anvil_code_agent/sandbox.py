@@ -54,7 +54,14 @@ def has_docker() -> bool:
 
 class DockerSandbox:
     """Process-isolated sandbox: a container with the work dir bind-mounted at /work.
-    Edit files on the host path; run commands inside the container via exec()."""
+    Edit files on the host path; run commands inside the container via exec().
+
+    Limitation — git operations: a git *worktree*'s ``.git`` entry is a plain file
+    containing a ``gitdir:`` pointer that references a path outside the bind mount.
+    This means git commands executed *inside* the container will fail or see no repo.
+    The container is intended only for running build/test commands; all git and diff
+    operations (``Worktree.diff()``, branch cleanup) must happen on the host.
+    """
 
     def __init__(self, workdir: str, image: str = "python:3.12-slim"):
         self.workdir = os.path.abspath(workdir)
