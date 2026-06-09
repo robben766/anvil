@@ -22,11 +22,12 @@ async def step(
     *,
     policy: ApprovalPolicy = auto_approve,
     token_budget: int | None = None,
+    summarizer=None,
 ) -> AgentState:
     """One reduce: call the model, execute any tool calls, return the new state."""
     msgs = list(state.messages)
     if token_budget is not None:
-        msgs = compact(msgs, max_tokens=token_budget)
+        msgs = compact(msgs, max_tokens=token_budget, summarizer=summarizer)
     resp = await chat(model, msgs, tools=registry.schemas())
     assistant_msg = resp.raw["choices"][0]["message"]
     if resp.tool_calls:
@@ -65,6 +66,7 @@ async def run(
     *,
     policy: ApprovalPolicy = auto_approve,
     token_budget: int | None = None,
+    summarizer=None,
 ) -> AgentState:
     """Drive step() until the model finishes or max_steps is hit."""
     with span("code_agent.run", model=model):
@@ -72,6 +74,7 @@ async def run(
             if state.step >= state.max_steps:
                 return state.finish("exhausted")
             state = await step(
-                state, model, registry, ctx, policy=policy, token_budget=token_budget
+                state, model, registry, ctx,
+                policy=policy, token_budget=token_budget, summarizer=summarizer,
             )
         return state
