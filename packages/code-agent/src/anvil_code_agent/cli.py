@@ -72,8 +72,6 @@ async def _run(ns: argparse.Namespace) -> int:
         print(res.diff)
         return 0 if res.passed else 1
     if ns.command == "swebench":
-        import os
-
         instances = load_instances(ns.dataset)
         if ns.limit:
             instances = instances[: ns.limit]

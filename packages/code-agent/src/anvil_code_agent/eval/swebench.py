@@ -6,6 +6,9 @@ official per-instance Docker harness — environment build is the benchmark's ow
 from __future__ import annotations
 
 import json
+import os
+import shlex
+import shutil
 import subprocess
 from dataclasses import dataclass, field
 
@@ -53,11 +56,15 @@ def load_instances(path: str) -> list[SweInstance]:
 
 def apply_test_patch(repo_root: str, instance: SweInstance) -> None:
     """git-apply the instance's test_patch and commit it, so a worktree checked out at
-    HEAD carries the (currently failing) tests. Raises RuntimeError if the patch fails."""
+    HEAD carries the (currently failing) tests. Raises RuntimeError if the patch fails.
+
+    --index stages exactly what the patch touches in one atomic step (all-or-nothing),
+    so partial application can't leave a half-staged state; no separate git add needed.
+    """
     if not instance.test_patch.strip():
         return
     r = subprocess.run(
-        ["git", "apply", "-"],
+        ["git", "apply", "--index", "-"],
         cwd=repo_root,
         input=instance.test_patch,
         capture_output=True,
@@ -65,7 +72,6 @@ def apply_test_patch(repo_root: str, instance: SweInstance) -> None:
     )
     if r.returncode != 0:
         raise RuntimeError(f"git apply test_patch failed: {r.stderr.strip()}")
-    subprocess.run(["git", "add", "-A"], cwd=repo_root, check=True)
     subprocess.run(
         ["git", "commit", "-q", "-m", f"apply test_patch for {instance.instance_id}"],
         cwd=repo_root,
@@ -75,7 +81,13 @@ def apply_test_patch(repo_root: str, instance: SweInstance) -> None:
 
 def instance_to_task(instance: SweInstance, repo_root: str) -> Task:
     """Build a bug-fix Task: agent gets the problem statement; success = FAIL_TO_PASS pass."""
-    targets = " ".join(instance.fail_to_pass)
+    if not instance.fail_to_pass:
+        raise ValueError(
+            f"instance {instance.instance_id} has empty FAIL_TO_PASS"
+            " — cannot build a meaningful verify"
+        )
+    # shlex.quote each id so pytest node-ids containing [...] or spaces survive shell=True
+    targets = " ".join(shlex.quote(t) for t in instance.fail_to_pass)
     return Task(
         id=instance.instance_id,
         repo=repo_root,
@@ -86,7 +98,12 @@ def instance_to_task(instance: SweInstance, repo_root: str) -> Task:
 
 def fetch_repo(instance: SweInstance, dest: str, *, repo_url: str | None = None) -> None:
     """Clone the instance repo to dest and check out base_commit. repo_url defaults to
-    GitHub (https://github.com/{repo}.git); pass a local path/URL to avoid the network."""
+    GitHub (https://github.com/{repo}.git); pass a local path/URL to avoid the network.
+
+    If dest already exists (e.g. on a re-run) it is removed before cloning so that
+    git clone never fails with 'destination path already exists'."""
+    if os.path.exists(dest):
+        shutil.rmtree(dest)
     url = repo_url or f"https://github.com/{instance.repo}.git"
     subprocess.run(["git", "clone", "--quiet", url, dest], check=True)
     subprocess.run(["git", "checkout", "-q", instance.base_commit], cwd=dest, check=True)
