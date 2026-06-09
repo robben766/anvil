@@ -72,8 +72,15 @@ def apply_test_patch(repo_root: str, instance: SweInstance) -> None:
     )
     if r.returncode != 0:
         raise RuntimeError(f"git apply test_patch failed: {r.stderr.strip()}")
+    # Inline -c identity: a freshly-cloned repo (and CI) may have no user.name/email
+    # configured, which would make `git commit` exit 128. This keeps it self-contained.
     subprocess.run(
-        ["git", "commit", "-q", "-m", f"apply test_patch for {instance.instance_id}"],
+        [
+            "git",
+            "-c", "user.email=anvil@anvil.local",
+            "-c", "user.name=anvil",
+            "commit", "-q", "-m", f"apply test_patch for {instance.instance_id}",
+        ],
         cwd=repo_root,
         check=True,
     )
