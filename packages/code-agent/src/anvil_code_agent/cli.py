@@ -36,6 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     w.add_argument("--workdir", default="/tmp/anvil-swebench", help="dir to clone repos into")
     w.add_argument("--model", default="deepseek-chat")
     w.add_argument("--max-steps", type=int, default=40)
+    w.add_argument("--docker", action="store_true", help="run each instance in a Docker sandbox (installs deps in-container)")
     return p
 
 
@@ -80,7 +81,14 @@ async def _run(ns: argparse.Namespace) -> int:
             dest = os.path.join(ns.workdir, inst.instance_id)
             try:
                 task = prepare_instance(inst, dest)
-                res = await solve_task(task, model=ns.model, max_steps=ns.max_steps)
+                res = await solve_task(
+                    task,
+                    model=ns.model,
+                    max_steps=ns.max_steps,
+                    use_docker=ns.docker,
+                    image=inst.image,
+                    setup_cmd=inst.install_cmd or None,
+                )
                 print(f"  {res.task_id}: {'PASS' if res.passed else 'FAIL'} ({res.steps} steps)")
                 results.append(res)
             except Exception as e:  # noqa: BLE001 — one broken instance must not kill the run
