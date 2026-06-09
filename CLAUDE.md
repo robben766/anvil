@@ -92,3 +92,5 @@ hand-rolled RAG pipeline:chunker / fastembed / PgVectorStore(pgvector) / Retriev
 - `eval/golden/baseline.jsonl`(M4)— calc/strops/counter 三个 bug-fix 任务(后两个多文件,逼 agent 用 repo_map/grep 定位)
 - CLI: `anvil-code-agent eval --dataset .../baseline.jsonl`(本地基线 pass@1)/ `anvil-code-agent swebench --dataset <instances.jsonl> [--limit N]`(官方实例,clone 真实仓,live)
 - `swebench --docker`(M5)— 每实例在 Docker 容器内隔离装依赖再跑:SweInstance 带 `image`(默认 python:3.11,含 gcc/git)+ `install_cmd`(如 `pip install -e .`);solve_task 的 `image`/`setup_cmd` 参在容器起来后先装仓依赖(失败即报错),再 agent 容器内跑 + 容器内 verify。把"依赖地狱"关进容器,是真跑官方 SWE-bench Lite 的前提(不造官方预构建镜像,临场装)
+- `context.compact` 摘要 tier(M6)— 截断后仍超预算时,把"中间回合"整段替换成一条 LLM 摘要(`llm_summarizer(model)`,gateway 实现),替换边界对齐非 tool 消息保 tool_use 配对;step/run 加 `summarizer` 可选参(默认 None=只截断)
+- `repo_map` 符号级排名(M6)— 每文件符号按全仓被引次数降序(枢纽符号优先)+ 每文件 top-K(`max_symbols_per_file`),比 M2 的文件级更细
