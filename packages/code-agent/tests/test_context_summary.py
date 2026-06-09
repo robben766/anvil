@@ -9,7 +9,8 @@ def _convo():
     ]
     for i in range(6):
         msgs.append({"role": "assistant", "content": None, "tool_calls": [
-            {"id": f"c{i}", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}]})
+            {"id": f"c{i}", "type": "function",
+             "function": {"name": "read_file", "arguments": "{}"}}]})
         msgs.append({"role": "tool", "tool_call_id": f"c{i}", "content": "X" * 500})
     msgs.append({"role": "user", "content": "recent ask"})
     return msgs

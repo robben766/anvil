@@ -60,3 +60,8 @@ uv run anvil-code-agent swebench --dataset swebench_lite.jsonl --limit 5 --docke
 ```
 
 容器内流程:起 `image` 容器(默认 python:3.11,带编译工具)→ `install_cmd` 装这个仓的依赖(editable,这样 agent 改源即时生效)→ agent 在容器内读写/跑测试 → 容器内跑 FAIL_TO_PASS。装不上的实例如实报 `docker setup failed`,与"代码没修对"区分开。**刻意不造官方每实例预构建镜像**——临场容器装依赖,够拿到一个诚实的真实 pass@1。
+
+## CA-M6:更深的上下文工程 + 检索
+
+- **摘要压缩 tier**:M3 的 compact 只会截断老工具输出;M6 加一层——超预算时把"中间回合"(系统/任务/最近窗口之外)整段换成一条 LLM 摘要,长任务下 context 不爆且保留要点。关键难点在**不破坏 tool_use 配对**:替换边界对齐到非 tool 消息,孤儿 tool 消息不会出现。
+- **符号级 repo map**:M2 排到文件粒度;M6 进一步把每个文件里的符号按"全仓被引次数"排序(被调最多的枢纽函数/类优先),并每文件限 top-K——agent 一眼看到最该关注的符号。
