@@ -38,3 +38,20 @@ class AgentState:
 
     def finish(self, status: Status) -> AgentState:
         return replace(self, status=status)
+
+    def resume(self, user_msg: Message) -> AgentState:
+        """Re-arm a finished chat state for another user turn: append the user message,
+        reset to running, reset the per-turn step counter (max_steps is per-turn)."""
+        return replace(self, messages=self.messages + (user_msg,), status="running", step=0)
+
+    @classmethod
+    def from_messages(
+        cls,
+        messages: tuple[Message, ...],
+        *,
+        workdir: str,
+        max_steps: int,
+        status: Status = "running",
+    ) -> AgentState:
+        """Rehydrate a state from a persisted message tuple (chat session resume)."""
+        return cls(messages=messages, step=0, max_steps=max_steps, workdir=workdir, status=status)
