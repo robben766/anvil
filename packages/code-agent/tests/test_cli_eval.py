@@ -7,11 +7,11 @@ from anvil_code_agent.eval.runner import RunResult
 from anvil_code_agent.eval.task import Task
 
 
-async def _fake_solve_pass(task, *, model, max_steps):
+async def _fake_solve_pass(task, *, model, max_steps, use_docker=False):
     return RunResult(task_id=task.id, passed=True, steps=2, diff="")
 
 
-async def _fake_solve_raise(task, *, model, max_steps):
+async def _fake_solve_raise(task, *, model, max_steps, use_docker=False):
     raise RuntimeError("agent exploded")
 
 
@@ -24,7 +24,7 @@ async def test_eval_batch_continues_after_task_exception(monkeypatch):
     recorded as passed=False and the rest continue."""
     tasks = [_make_task("ok-task"), _make_task("bad-task")]
 
-    async def _solve(task, *, model, max_steps):
+    async def _solve(task, *, model, max_steps, use_docker=False):
         if task.id == "bad-task":
             raise RuntimeError("agent exploded")
         return RunResult(task_id=task.id, passed=True, steps=2, diff="")
