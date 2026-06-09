@@ -106,3 +106,22 @@ class CoreBlockRow(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
     __table_args__ = (UniqueConstraint("employee", "label", name="uq_core_employee_label"),)
+
+
+class InboxRow(Base):
+    __tablename__ = "ae_inbox"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    job_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    employee: Mapped[str] = mapped_column(Text, nullable=False)
+    tool_name: Mapped[str] = mapped_column(Text, nullable=False)
+    tool_args: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    risk: Mapped[str] = mapped_column(Text, nullable=False)
+    state_json: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
+    decision: Mapped[str | None] = mapped_column(Text, nullable=True)
+    decision_payload: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
