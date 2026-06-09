@@ -39,3 +39,58 @@ class Worktree:
             capture_output=True,
         )
         subprocess.run(["git", "branch", "-D", self._branch], cwd=self.repo, capture_output=True)
+
+
+def has_docker() -> bool:
+    """True if a docker daemon is reachable."""
+    try:
+        r = subprocess.run(
+            ["docker", "info"], capture_output=True, timeout=10
+        )
+        return r.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+class DockerSandbox:
+    """Process-isolated sandbox: a container with the work dir bind-mounted at /work.
+    Edit files on the host path; run commands inside the container via exec().
+
+    Limitation — git operations: a git *worktree*'s ``.git`` entry is a plain file
+    containing a ``gitdir:`` pointer that references a path outside the bind mount.
+    This means git commands executed *inside* the container will fail or see no repo.
+    The container is intended only for running build/test commands; all git and diff
+    operations (``Worktree.diff()``, branch cleanup) must happen on the host.
+    """
+
+    def __init__(self, workdir: str, image: str = "python:3.12-slim"):
+        self.workdir = os.path.abspath(workdir)
+        self.image = image
+        self.name = f"anvil-box-{uuid.uuid4().hex[:8]}"
+
+    def __enter__(self) -> DockerSandbox:
+        subprocess.run(
+            [
+                "docker", "run", "-d", "--name", self.name,
+                "-v", f"{self.workdir}:/work", "-w", "/work",
+                self.image, "sleep", "infinity",
+            ],
+            check=True,
+            capture_output=True,
+        )
+        return self
+
+    def exec(self, cmd: str, timeout: float = 120.0) -> tuple[int, str]:
+        try:
+            r = subprocess.run(
+                ["docker", "exec", "-w", "/work", self.name, "sh", "-c", cmd],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            return (124, f"command timed out after {timeout}s")
+        return (r.returncode, (r.stdout or "") + (r.stderr or ""))
+
+    def __exit__(self, *exc) -> None:
+        subprocess.run(["docker", "rm", "-f", self.name], capture_output=True)

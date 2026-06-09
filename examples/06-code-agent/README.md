@@ -26,3 +26,10 @@ agent 现在能自己定位代码,不靠人喂文件:
 - `grep` — 纯 Python regex 全仓搜索(跳过 .git/__pycache__ 等),CI 无外部依赖
 
 设计要点:repo map 把"引用→定义"建成文件图跑 PageRank——定义了被广泛调用符号的文件(枢纽)自然浮到最前,正是 agent 最该先读的地方。
+
+## CA-M3:工程化(可长跑 / 可控 / 可隔离 / 可恢复)
+
+- **上下文压缩**:`estimate_tokens` + `compact` ——超预算时截断老的大工具输出,但绝不删消息/打乱顺序(保住 tool_use 配对的结构正确)。发送前应用,完整历史仍留存供 diff/恢复。
+- **权限门**:工具按风险分三档(low/medium/high,未知按 high 安全默认),审批策略是 `(name,args,risk)->bool` 回调;eval 用 auto_approve,交互可换成对 high 风险要人批的门。被拦的工具不执行、转成模型反馈。
+- **Docker 沙箱**:`DockerSandbox` 用 docker CLI 起容器、bind-mount workdir,bash 经 `ToolContext.executor` 路由进容器执行——跑任意 shell 才真正进程级隔离(host 子进程是默认回退)。
+- **断点恢复**:AgentState 全是普通 dict,`dump_state`/`load_state` 一行落盘/重载,崩溃或主动暂停后可 resume(12-Factor #6)。

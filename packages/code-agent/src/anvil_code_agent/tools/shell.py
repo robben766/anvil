@@ -16,15 +16,18 @@ def _truncate(text: str, limit: int) -> tuple[str, bool]:
 
 @tool(
     name="bash",
-    description=(
-        "Run a shell command in the working dir. Returns combined stdout+stderr. "
-        "NOTE: commands are not sandboxed in M1 — they can read/write outside the worktree; "
-        "true process isolation is deferred to M3 (Docker)."
-    ),
+    description="Run a shell command in the working dir. Returns combined stdout+stderr. "
+    "Paths/commands are not sandboxed in M1 unless a Docker executor is attached (M3).",
     params={"cmd": {"type": "string", "description": "shell command"}},
     required=["cmd"],
 )
 def bash(args: dict, ctx: ToolContext) -> ToolResult:
+    if ctx.executor is not None:
+        rc, raw = ctx.executor(args["cmd"])
+        out, truncated = _truncate(raw, ctx.max_output)
+        if rc != 0:
+            return ToolResult(content=f"exit code {rc}\n{out}", ok=False, truncated=truncated)
+        return ToolResult(content=out, ok=True, truncated=truncated)
     try:
         proc = subprocess.run(
             args["cmd"],
