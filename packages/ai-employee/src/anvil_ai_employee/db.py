@@ -47,6 +47,8 @@ class JobRow(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     schedule_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    goal_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    employee: Mapped[str | None] = mapped_column(Text, nullable=True)
     skill: Mapped[str] = mapped_column(Text, nullable=False)
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
@@ -143,3 +145,18 @@ class McpTokenRow(Base):
     __table_args__ = (
         UniqueConstraint("employee", "connector", "env_key", name="uq_mcp_token"),
     )
+
+
+class GoalRow(Base):
+    __tablename__ = "ae_goals"
+
+    # A fleet goal: the supervisor decomposes `objective` into child jobs (ae_jobs.goal_id),
+    # the aggregator synthesizes their results into `result` once all children are terminal.
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    objective: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
+    result: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -59,6 +59,7 @@ source = { editable = "packages/ai-employee" }
 dependencies = [
     { name = "anvil-code-agent" },
     { name = "anvil-gateway" },
+    { name = "anvil-guard" },
     { name = "anvil-kb" },
     { name = "anvil-obs" },
     { name = "asyncpg" },
@@ -80,6 +81,7 @@ dev = [
 requires-dist = [
     { name = "anvil-code-agent", editable = "packages/code-agent" },
     { name = "anvil-gateway", editable = "packages/core/gateway" },
+    { name = "anvil-guard", editable = "packages/core/guard" },
     { name = "anvil-kb", editable = "packages/kb" },
     { name = "anvil-obs", editable = "packages/core/obs" },
     { name = "asyncpg", specifier = ">=0.29" },
