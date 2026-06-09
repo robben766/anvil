@@ -1,5 +1,7 @@
 import sys
 
+import pytest
+
 _SERVER = ["-m", "anvil_ai_employee.mcp.mock_servers.email_server"]
 
 
@@ -69,3 +71,21 @@ def test_close_is_idempotent():
     c.start()
     c.close()
     c.close()  # must not raise
+
+
+def test_start_failure_tears_down_loop_thread():
+    """A server that exits immediately fails the handshake; start() must raise AND
+    self-clean (no leaked loop thread) rather than leaving run_forever() hanging."""
+    from anvil_ai_employee.mcp.client import McpClient
+    from anvil_ai_employee.mcp.transport import McpTransportError
+
+    c = McpClient(
+        connector="dead",
+        command=sys.executable,
+        args=["-c", "import sys; sys.exit(0)"],
+        env={},
+    )
+    with pytest.raises(McpTransportError):
+        c.start()
+    assert c._thread is None or not c._thread.is_alive()
+    c.close()  # still idempotent after a failed start

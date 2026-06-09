@@ -68,9 +68,15 @@ class McpClient:
         self._thread = threading.Thread(target=_run, name=f"mcp-{self.connector}", daemon=True)
         self._thread.start()
         ready.result(timeout=10)
-        self._specs = asyncio.run_coroutine_threadsafe(self._async_start(), self._loop).result(
-            timeout=30
-        )
+        try:
+            self._specs = asyncio.run_coroutine_threadsafe(
+                self._async_start(), self._loop
+            ).result(timeout=30)
+        except Exception:
+            # Handshake failed (e.g. server died mid-initialize). Tear down the loop thread
+            # + any spawned subprocess so a failed start() never leaks resources.
+            self.close()
+            raise
         return self._specs
 
     async def _async_start(self) -> list[McpToolSpec]:

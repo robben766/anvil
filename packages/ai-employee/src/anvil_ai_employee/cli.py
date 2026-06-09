@@ -309,7 +309,7 @@ async def _run_mcp_demo(
                 row = await store.get(iid)
                 resumed = await resume_from_inbox(
                     row, registry=registry, ctx=ctx, model=model,
-                    session_factory=sf, embedder=FastEmbedEmbedder(),
+                    session_factory=sf, embedder=FastEmbedEmbedder(), policy=policy,
                 )
                 reply = next(
                     (m.get("content") for m in reversed(resumed.messages)

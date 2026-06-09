@@ -37,12 +37,19 @@ async def build_mcp_registry(
     all_tools = []
     clients: list[McpClient] = []
     risk_by_tool: dict[str, str] = {}
-    for cfg in configs:
-        env = await token_store.env_for(employee=employee, connector=cfg.name)
-        client = McpClient(connector=cfg.name, command=cfg.command, args=cfg.args, env=env)
-        specs = client.start()  # blocking handshake on the client's own loop thread
-        clients.append(client)
-        all_tools.extend(mcp_tools(client, specs))
-        for spec in specs:
-            risk_by_tool[f"{cfg.name}__{spec.name}"] = mcp_risk(spec)
+    try:
+        for cfg in configs:
+            env = await token_store.env_for(employee=employee, connector=cfg.name)
+            client = McpClient(connector=cfg.name, command=cfg.command, args=cfg.args, env=env)
+            specs = client.start()  # blocking handshake on the client's own loop thread
+            clients.append(client)
+            all_tools.extend(mcp_tools(client, specs))
+            for spec in specs:
+                risk_by_tool[f"{cfg.name}__{spec.name}"] = mcp_risk(spec)
+    except Exception:
+        # Partial failure (e.g. a later connector's server dies mid-handshake): close every
+        # client we already started so we never leak a loop thread + subprocess.
+        for c in clients:
+            c.close()
+        raise
     return ToolRegistry(all_tools), clients, mcp_risk_policy(risk_by_tool)
