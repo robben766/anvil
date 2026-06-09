@@ -327,6 +327,48 @@ async def _run_mcp_demo(
             c.close()
 
 
+async def team_run(
+    sf: async_sessionmaker[AsyncSession], *, objective: str, model: str
+) -> uuid.UUID:
+    from anvil_ai_employee.db import GoalRow
+    from anvil_ai_employee.fleet.supervisor import decompose, fan_out
+    from anvil_ai_employee.fleet.team import EMPLOYEES
+
+    goal_id = uuid.uuid4()
+    async with sf() as s:
+        async with s.begin():
+            s.add(GoalRow(id=goal_id, objective=objective, status="running"))
+    subs = await decompose(objective, model=model, employees=list(EMPLOYEES))
+    await fan_out(sf, goal_id=goal_id, subtasks=subs)
+    return goal_id
+
+
+async def team_status_text(
+    sf: async_sessionmaker[AsyncSession], *, goal_id: uuid.UUID, model: str
+) -> str:
+    from sqlalchemy import select
+
+    from anvil_ai_employee.db import GoalRow, JobRow
+    from anvil_ai_employee.fleet.aggregator import aggregate
+
+    async with sf() as s:
+        goal = (
+            await s.execute(select(GoalRow).where(GoalRow.id == goal_id))
+        ).scalar_one_or_none()
+        if goal is None:
+            return f"goal {goal_id} 不存在。"
+        children = (
+            (await s.execute(select(JobRow).where(JobRow.goal_id == goal_id))).scalars().all()
+        )
+    lines = [f"goal {str(goal_id)[:8]}: {goal.objective}  status={goal.status}"]
+    for c in children:
+        lines.append(f"  [{c.employee}] {c.status}  task={c.payload.get('task', '')}")
+    final = await aggregate(sf, goal_id, model=model)
+    if final is not None:
+        lines.append("\n=== 最终产出 ===\n" + final)
+    return "\n".join(lines)
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="anvil-ai-employee")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -413,6 +455,17 @@ def main() -> None:
         help="space-separated server argv",
     )
     rm.add_argument("--auto-approve", action="store_true", dest="auto_approve")
+
+    team_p = sub.add_parser("team")
+    team_sub = team_p.add_subparsers(dest="team_cmd", required=True)
+
+    tr = team_sub.add_parser("run")
+    tr.add_argument("--goal", required=True)
+    tr.add_argument("--model", default="deepseek-chat")
+
+    ts = team_sub.add_parser("status")
+    ts.add_argument("--goal", required=True)
+    ts.add_argument("--model", default="deepseek-chat")
 
     args = p.parse_args()
     sf = make_session_factory()  # reads ANVIL_DATABASE_URL
@@ -502,3 +555,14 @@ def main() -> None:
                 model=args.model, config=cfg, auto_approve=args.auto_approve,
             )
         )
+    elif args.cmd == "team":
+        if args.team_cmd == "run":
+            gid = asyncio.run(team_run(sf, objective=args.goal, model=args.model))
+            print(f"goal_id = {gid}")
+            print(asyncio.run(team_status_text(sf, goal_id=gid, model=args.model)))
+        elif args.team_cmd == "status":
+            print(
+                asyncio.run(
+                    team_status_text(sf, goal_id=uuid.UUID(args.goal), model=args.model)
+                )
+            )
