@@ -1,15 +1,12 @@
-import uuid
-from datetime import UTC, datetime
-
-import pytest
-
 from anvil_ai_employee.db import JobRow, MemoryRow, ScheduleRow
 
 
 def test_rows_have_expected_columns():
     # schedule
     cols = ScheduleRow.__table__.columns.keys()
-    assert {"id", "name", "cron_expr", "skill", "payload", "next_run_at", "enabled", "created_at"} <= set(cols)
+    assert {
+        "id", "name", "cron_expr", "skill", "payload", "next_run_at", "enabled", "created_at"
+    } <= set(cols)
     # job
     jcols = JobRow.__table__.columns.keys()
     assert {"id", "schedule_id", "skill", "payload", "status", "result", "error", "locked_by",
