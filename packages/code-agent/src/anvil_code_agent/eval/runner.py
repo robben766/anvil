@@ -80,29 +80,38 @@ def staged_repo(path: str):
 
 
 async def solve_task(
-    task: Task, *, model: str, max_steps: int = 20, use_docker: bool = False
+    task: Task,
+    *,
+    model: str,
+    max_steps: int = 20,
+    use_docker: bool = False,
+    image: str | None = None,
+    setup_cmd: str | None = None,
 ) -> RunResult:
     with staged_repo(task.repo) as repo_root:
         with Worktree(repo_root) as wt:
             if use_docker and has_docker():
-                with DockerSandbox(wt.path) as box:
-                    ctx = ToolContext(workdir=wt.path, executor=box.exec)
-                    state = AgentState.new(
-                        system=SYSTEM_PROMPT, task=task.prompt, workdir=wt.path, max_steps=max_steps
-                    )
-                    final = await run(state, model, default_registry(), ctx)
-                    # Ensure test dependencies (pytest) are available inside the container.
-                    # If install fails (e.g. no network), raise immediately so the caller
-                    # sees an infra error rather than a silent test-failure.
+                with DockerSandbox(wt.path, image=image or "python:3.11") as box:
+                    # 1. install the repo's own deps (editable, so agent edits take effect)
+                    if setup_cmd:
+                        s_rc, s_out = box.exec(setup_cmd, timeout=900.0)
+                        if s_rc != 0:
+                            raise RuntimeError(
+                                f"docker setup failed: setup_cmd rc={s_rc}: {s_out[:300]}"
+                            )
+                    # 2. ensure pytest is available for the verify step
                     pip_rc, pip_out = box.exec("pip install -q pytest")
                     if pip_rc != 0:
                         raise RuntimeError(
                             f"docker setup failed: pip install pytest rc={pip_rc}: {pip_out[:200]}"
                         )
-                    # Note: the container runs as root, so files written into the
-                    # bind-mounted worktree are root-owned (acceptable for throwaway
-                    # worktrees; a future hardening is to pass --user to `docker run`).
-                    # verify runs in-container; wt.diff() runs on the host.
+                    # container runs as root → bind-mounted writes are root-owned (ok for
+                    # throwaway worktrees). verify runs in-container; wt.diff() on the host.
+                    ctx = ToolContext(workdir=wt.path, executor=box.exec)
+                    state = AgentState.new(
+                        system=SYSTEM_PROMPT, task=task.prompt, workdir=wt.path, max_steps=max_steps
+                    )
+                    final = await run(state, model, default_registry(), ctx)
                     rc, out = box.exec(task.verify_cmd)
                     return RunResult(
                         task_id=task.id, passed=rc == 0, steps=final.step, diff=wt.diff()
