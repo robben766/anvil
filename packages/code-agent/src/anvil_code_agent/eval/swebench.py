@@ -83,3 +83,20 @@ def instance_to_task(instance: SweInstance, repo_root: str) -> Task:
         prompt=instance.problem_statement,
         verify_cmd=f"python -m pytest {targets} -q",
     )
+
+
+def fetch_repo(instance: SweInstance, dest: str, *, repo_url: str | None = None) -> None:
+    """Clone the instance repo to dest and check out base_commit. repo_url defaults to
+    GitHub (https://github.com/{repo}.git); pass a local path/URL to avoid the network."""
+    url = repo_url or f"https://github.com/{instance.repo}.git"
+    subprocess.run(["git", "clone", "--quiet", url, dest], check=True)
+    subprocess.run(["git", "checkout", "-q", instance.base_commit], cwd=dest, check=True)
+
+
+def prepare_instance(
+    instance: SweInstance, dest: str, *, repo_url: str | None = None
+) -> Task:
+    """Full setup: fetch repo @ base_commit → apply+commit test_patch → build Task."""
+    fetch_repo(instance, dest, repo_url=repo_url)
+    apply_test_patch(dest, instance)
+    return instance_to_task(instance, dest)
