@@ -47,3 +47,33 @@ async def test_complete_and_fail(session_factory):
     async with session_factory() as s:
         row = (await s.execute(select(JobRow).where(JobRow.id == j2))).scalar_one()
         assert row.status == "failed" and row.error == "boom" and row.finished_at is not None
+
+
+async def test_enqueue_and_claim_carry_goal_and_employee(session_factory):
+    import uuid
+
+    from anvil_ai_employee.scheduler.queue import claim_one, enqueue
+
+    gid = uuid.uuid4()
+    await enqueue(
+        session_factory,
+        skill="kb_digest",
+        payload={"task": "查 X"},
+        goal_id=gid,
+        employee="researcher",
+    )
+    claimed = await claim_one(session_factory, worker_id="w1")
+    assert claimed is not None
+    assert claimed.goal_id == gid
+    assert claimed.employee == "researcher"
+    assert claimed.payload == {"task": "查 X"}
+
+
+async def test_enqueue_without_goal_defaults_null(session_factory):
+    from anvil_ai_employee.scheduler.queue import claim_one, enqueue
+
+    await enqueue(session_factory, skill="kb_digest", payload={})
+    claimed = await claim_one(session_factory, worker_id="w1")
+    assert claimed is not None
+    assert claimed.goal_id is None
+    assert claimed.employee is None
