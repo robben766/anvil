@@ -83,3 +83,8 @@ hand-rolled RAG pipeline:chunker / fastembed / PgVectorStore(pgvector) / Retriev
 - CLI: `anvil-code-agent solve --repo <r> --prompt "<p>"` / `anvil-code-agent eval --dataset <tasks.jsonl>`
 - 测试: `uv run pytest packages/code-agent -q`(工具/沙箱纯本地;loop/runner 走 respx mock + 测试 PG@5434);live 冒烟需 DEEPSEEK_API_KEY
 - 复用 gateway(tool_use 往返)/obs(span 追踪每步工具);eval-pipeline 集成推迟到 M4(SWE-bench 基线)
+- `harness/context.py`(M3)— 字符估 token + 结构安全压缩(只截老工具输出,不破坏 tool_use 配对),发送前按 token_budget 应用
+- `harness/permission.py`(M3)— 工具风险分级(read/grep/repo_map=low,edit/run_tests=medium,bash=high,未知=high)+ 审批策略回调(auto_approve/deny_high/gate_by_risk),dispatch 前拦截,拦截转模型反馈
+- `harness/recovery.py`(M3)— AgentState ↔ JSON dump/load,断点落盘可 resume
+- `sandbox.py` DockerSandbox(M3)— docker CLI 起容器,workdir bind-mount 到 /work,`exec()` 容器内执行;`ToolContext.executor` 接缝让 bash 路由进容器(host 为默认回退)
+- step/run 加 `policy`/`token_budget` 可选参,默认保持 M1 行为
