@@ -50,3 +50,36 @@ def load_instances(path: str) -> list[SweInstance]:
                 )
             )
     return out
+
+
+def apply_test_patch(repo_root: str, instance: SweInstance) -> None:
+    """git-apply the instance's test_patch and commit it, so a worktree checked out at
+    HEAD carries the (currently failing) tests. Raises RuntimeError if the patch fails."""
+    if not instance.test_patch.strip():
+        return
+    r = subprocess.run(
+        ["git", "apply", "-"],
+        cwd=repo_root,
+        input=instance.test_patch,
+        capture_output=True,
+        text=True,
+    )
+    if r.returncode != 0:
+        raise RuntimeError(f"git apply test_patch failed: {r.stderr.strip()}")
+    subprocess.run(["git", "add", "-A"], cwd=repo_root, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", f"apply test_patch for {instance.instance_id}"],
+        cwd=repo_root,
+        check=True,
+    )
+
+
+def instance_to_task(instance: SweInstance, repo_root: str) -> Task:
+    """Build a bug-fix Task: agent gets the problem statement; success = FAIL_TO_PASS pass."""
+    targets = " ".join(instance.fail_to_pass)
+    return Task(
+        id=instance.instance_id,
+        repo=repo_root,
+        prompt=instance.problem_statement,
+        verify_cmd=f"python -m pytest {targets} -q",
+    )
