@@ -5,7 +5,8 @@ swap in a gate that requires human approval for high-risk tools."""
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 ApprovalPolicy = Callable[[str, dict[str, Any], str], bool]
 

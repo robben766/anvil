@@ -6,7 +6,8 @@ def _msgs():
         {"role": "system", "content": "you are a coder"},
         {"role": "user", "content": "fix the bug"},
         {"role": "assistant", "content": None, "tool_calls": [
-            {"id": "c1", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}]},
+            {"id": "c1", "type": "function",
+             "function": {"name": "read_file", "arguments": "{}"}}]},
         {"role": "tool", "tool_call_id": "c1", "content": "X" * 4000},  # 老的大工具输出
         {"role": "assistant", "content": "still working"},
         {"role": "user", "content": "keep going"},
