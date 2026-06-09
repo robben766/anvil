@@ -125,3 +125,21 @@ class InboxRow(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class McpTokenRow(Base):
+    __tablename__ = "ae_mcp_tokens"
+
+    # Server-side credential custody: the agent never sees these. McpClient injects them
+    # into the MCP server subprocess env at spawn; tool-call args never carry them.
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    employee: Mapped[str] = mapped_column(Text, nullable=False)
+    connector: Mapped[str] = mapped_column(Text, nullable=False)
+    env_key: Mapped[str] = mapped_column(Text, nullable=False)
+    secret: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    __table_args__ = (
+        UniqueConstraint("employee", "connector", "env_key", name="uq_mcp_token"),
+    )

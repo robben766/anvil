@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import sys
 import uuid
 from datetime import UTC, datetime
 
@@ -232,6 +233,100 @@ async def _run_hitl_demo(
         print(f"[run-hitl] 终态: {out.status}")
 
 
+async def mcp_put_token(
+    sf: async_sessionmaker[AsyncSession],
+    *,
+    employee: str,
+    connector: str,
+    env_key: str,
+    secret: str,
+) -> None:
+    from anvil_ai_employee.mcp.tokens import McpTokenStore
+
+    await McpTokenStore(sf).put(
+        employee=employee, connector=connector, env_key=env_key, secret=secret
+    )
+
+
+async def mcp_list_tools_text(
+    sf: async_sessionmaker[AsyncSession],
+    *,
+    employee: str,
+    config,
+) -> str:
+    from anvil_ai_employee.mcp.adapter import mcp_risk
+    from anvil_ai_employee.mcp.client import McpClient
+    from anvil_ai_employee.mcp.tokens import McpTokenStore
+
+    env = await McpTokenStore(sf).env_for(employee=employee, connector=config.name)
+    client = McpClient(connector=config.name, command=config.command, args=config.args, env=env)
+    try:
+        specs = client.start()
+        lines = []
+        for spec in specs:
+            ann = ",".join(k for k, v in (spec.annotations or {}).items() if v is True) or "-"
+            lines.append(f"  {config.name}__{spec.name}  risk={mcp_risk(spec)}  hints={ann}")
+    finally:
+        client.close()
+    return f"connector {config.name} tools:\n" + "\n".join(lines)
+
+
+async def _run_mcp_demo(
+    sf: async_sessionmaker[AsyncSession],
+    *,
+    persona: str,
+    task: str,
+    employee: str,
+    model: str,
+    config,
+    auto_approve: bool,
+) -> None:
+    from anvil_code_agent.state import AgentState
+    from anvil_code_agent.tools.base import ToolContext
+
+    from anvil_ai_employee.hitl import hitl_run
+    from anvil_ai_employee.inbox import InboxStore
+    from anvil_ai_employee.inbox_resume import resume_from_inbox
+    from anvil_ai_employee.mcp.connector import build_mcp_registry
+    from anvil_ai_employee.mcp.tokens import McpTokenStore
+    from anvil_kb.embed import FastEmbedEmbedder
+
+    registry, clients, policy = await build_mcp_registry(
+        configs=[config], employee=employee, token_store=McpTokenStore(sf)
+    )
+    ctx = ToolContext(workdir="/tmp")
+    state = AgentState.new(system=persona, task=task, workdir="/tmp", max_steps=10)
+    print(f"[run-mcp] connector={config.name} model={model} employee={employee}")
+    print(f"[run-mcp] task: {task}")
+    try:
+        out = await hitl_run(state, model, registry, ctx, policy=policy)
+        if out.status == "suspended":
+            iid = await InboxStore(sf).suspend(employee=employee, state=out)
+            print(f"[run-mcp] 高风险 MCP 动作挂起进 Inbox。inbox_id={iid}")
+            if auto_approve:
+                store = InboxStore(sf)
+                await inbox_resolve(sf, inbox_id=iid, decision="approve", payload={})
+                row = await store.get(iid)
+                resumed = await resume_from_inbox(
+                    row, registry=registry, ctx=ctx, model=model,
+                    session_factory=sf, embedder=FastEmbedEmbedder(), policy=policy,
+                )
+                reply = next(
+                    (m.get("content") for m in reversed(resumed.messages)
+                     if m.get("role") == "tool"), "",
+                )
+                print(f"[run-mcp] --auto-approve:已执行 MCP 工具,结果(已脱敏):{reply}")
+        elif out.status == "done":
+            print(f"[run-mcp] 完成(未触发挂起)。步数={out.step}")
+        else:
+            print(f"[run-mcp] 终态: {out.status}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[run-mcp] 失败(可能缺 API key 或连接器): {exc}")
+    finally:
+        for c in clients:
+            c.close()
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="anvil-ai-employee")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -287,6 +382,37 @@ def main() -> None:
     rh.add_argument("--task", default="请帮我清理临时文件。")
     rh.add_argument("--employee", default="assistant")
     rh.add_argument("--model", default="deepseek-chat")
+
+    mcp_p = sub.add_parser("mcp")
+    mcp_sub = mcp_p.add_subparsers(dest="mcp_cmd", required=True)
+
+    mcp_lt = mcp_sub.add_parser("list-tools")
+    mcp_lt.add_argument("--connector", default="gmail")
+    mcp_lt.add_argument("--command", default=sys.executable)
+    mcp_lt.add_argument(
+        "--args", default="-m anvil_ai_employee.mcp.mock_servers.email_server",
+        help="space-separated server argv",
+    )
+    mcp_lt.add_argument("--employee", default="assistant")
+
+    mcp_pt = mcp_sub.add_parser("put-token")
+    mcp_pt.add_argument("--connector", required=True)
+    mcp_pt.add_argument("--env-key", required=True, dest="env_key")
+    mcp_pt.add_argument("--secret", required=True)
+    mcp_pt.add_argument("--employee", default="assistant")
+
+    rm = sub.add_parser("run-mcp")
+    rm.add_argument("--persona", default="你是一个 AI 助理,可使用外部工具。")
+    rm.add_argument("--task", default="查一下 2026-06-09 的日程。")
+    rm.add_argument("--employee", default="assistant")
+    rm.add_argument("--model", default="deepseek-chat")
+    rm.add_argument("--connector", default="gmail")
+    rm.add_argument("--command", default=sys.executable)
+    rm.add_argument(
+        "--args", default="-m anvil_ai_employee.mcp.mock_servers.email_server",
+        help="space-separated server argv",
+    )
+    rm.add_argument("--auto-approve", action="store_true", dest="auto_approve")
 
     args = p.parse_args()
     sf = make_session_factory()  # reads ANVIL_DATABASE_URL
@@ -350,3 +476,29 @@ def main() -> None:
     elif args.cmd == "run-hitl":
         asyncio.run(_run_hitl_demo(sf, persona=args.persona, task=args.task,
                                    employee=args.employee, model=args.model))
+    elif args.cmd == "mcp":
+        from anvil_ai_employee.mcp.connector import ConnectorConfig
+
+        if args.mcp_cmd == "list-tools":
+            cfg = ConnectorConfig(
+                name=args.connector, command=args.command, args=args.args.split()
+            )
+            print(asyncio.run(mcp_list_tools_text(sf, employee=args.employee, config=cfg)))
+        elif args.mcp_cmd == "put-token":
+            asyncio.run(
+                mcp_put_token(
+                    sf, employee=args.employee, connector=args.connector,
+                    env_key=args.env_key, secret=args.secret,
+                )
+            )
+            print(f"token 已写入: {args.employee}/{args.connector}/{args.env_key}")
+    elif args.cmd == "run-mcp":
+        from anvil_ai_employee.mcp.connector import ConnectorConfig
+
+        cfg = ConnectorConfig(name=args.connector, command=args.command, args=args.args.split())
+        asyncio.run(
+            _run_mcp_demo(
+                sf, persona=args.persona, task=args.task, employee=args.employee,
+                model=args.model, config=cfg, auto_approve=args.auto_approve,
+            )
+        )

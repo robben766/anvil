@@ -1,3 +1,4 @@
+import sys
 from datetime import UTC, datetime
 
 import pytest
@@ -64,3 +65,27 @@ async def test_inbox_list_and_resolve_helpers(session_factory):
     await inbox_resolve(session_factory, inbox_id=iid, decision="reject", payload={"reason": "no"})
     after = await inbox_list_text(session_factory)
     assert "(空)" in after or "pending" not in after.lower()
+
+
+_MCP_SERVER = ["-m", "anvil_ai_employee.mcp.mock_servers.email_server"]
+
+
+async def test_mcp_list_tools_text(session_factory):
+    from anvil_ai_employee.cli import mcp_list_tools_text
+    from anvil_ai_employee.mcp.connector import ConnectorConfig
+
+    cfg = ConnectorConfig(name="gmail", command=sys.executable, args=_MCP_SERVER)
+    text = await mcp_list_tools_text(session_factory, employee="alice", config=cfg)
+    assert "gmail__list_events" in text
+    assert "low" in text and "high" in text
+
+
+async def test_mcp_put_token(session_factory):
+    from anvil_ai_employee.cli import mcp_put_token
+    from anvil_ai_employee.mcp.tokens import McpTokenStore
+
+    await mcp_put_token(
+        session_factory, employee="alice", connector="gmail", env_key="GMAIL_TOKEN", secret="T"
+    )
+    env = await McpTokenStore(session_factory).env_for(employee="alice", connector="gmail")
+    assert env == {"GMAIL_TOKEN": "T"}
