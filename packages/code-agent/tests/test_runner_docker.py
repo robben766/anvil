@@ -4,8 +4,8 @@ import subprocess
 
 import pytest
 from anvil_code_agent.eval.runner import solve_task
-from anvil_code_agent.sandbox import has_docker
 from anvil_code_agent.eval.task import Task
+from anvil_code_agent.sandbox import has_docker
 
 
 def test_solve_task_accepts_use_docker_param():

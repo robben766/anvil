@@ -61,7 +61,7 @@ class DockerSandbox:
         self.image = image
         self.name = f"anvil-box-{uuid.uuid4().hex[:8]}"
 
-    def __enter__(self) -> "DockerSandbox":
+    def __enter__(self) -> DockerSandbox:
         subprocess.run(
             [
                 "docker", "run", "-d", "--name", self.name,
