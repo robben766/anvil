@@ -1,5 +1,5 @@
 [tool.uv.workspace]
-members = ["packages/core/*", "packages/kb", "packages/code-agent", "apps/kb-api"]
+members = ["packages/core/*", "packages/kb", "packages/code-agent", "packages/ai-employee", "apps/kb-api"]
 
 [tool.ruff]
 line-length = 100
