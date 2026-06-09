@@ -13,6 +13,15 @@ async def resume_from_inbox(
     inbox_row, *, registry, ctx, model, session_factory, embedder, policy=suspend_high
 ):
     state = load_state(inbox_row.state_json)
+    # Apply the decision first; record the intervention only after it succeeds so a
+    # malformed decision never leaves an orphan memory.
+    state = apply_decision(
+        state,
+        decision=inbox_row.decision,
+        payload=inbox_row.decision_payload or {},
+        registry=registry,
+        ctx=ctx,
+    )
     await record_intervention(
         session_factory,
         embedder=embedder,
@@ -21,12 +30,5 @@ async def resume_from_inbox(
         decision=inbox_row.decision,
         payload=inbox_row.decision_payload or {},
         tool_args=inbox_row.tool_args,
-    )
-    state = apply_decision(
-        state,
-        decision=inbox_row.decision,
-        payload=inbox_row.decision_payload or {},
-        registry=registry,
-        ctx=ctx,
     )
     return await hitl_run(state, model, registry, ctx, policy=policy)

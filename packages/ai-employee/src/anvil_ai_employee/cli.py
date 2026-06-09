@@ -126,27 +126,71 @@ async def inbox_resolve(
     inbox_id: uuid.UUID,
     decision: str,
     payload: dict,
-) -> None:
-    """Resolve an inbox item and write the intervention to long-term memory."""
-    from anvil_ai_employee.hitl_memory import record_intervention
+) -> bool:
+    """Resolve an inbox item (idempotent). Returns True if it actually transitioned
+    from pending (False if it was already resolved / not found)."""
     from anvil_ai_employee.inbox import InboxStore
+
+    store = InboxStore(sf)
+    row = await store.get(inbox_id)
+    if row is None or row.status != "pending":
+        return False
+    await store.resolve(inbox_id, decision=decision, payload=payload)
+    return True
+
+
+def _demo_registry():
+    """The high-risk 'shell' registry used by run-hitl and by inbox resume — M3 demos the
+    HITL mechanism with this single employee; per-skill registry reconstruction is M4/M5
+    worker integration."""
+    from anvil_code_agent.tools.base import ToolContext, ToolRegistry, ToolResult, tool
+
+    @tool(name="shell", description="Execute a shell command.", params={"cmd": {"type": "string"}},
+          required=["cmd"])
+    def shell(args: dict, ctx: ToolContext) -> ToolResult:  # pragma: no cover
+        return ToolResult(content=f"ran: {args['cmd']}", ok=True)
+
+    return ToolRegistry([shell]), ToolContext(workdir="/tmp")
+
+
+async def _inbox_decide(
+    sf: async_sessionmaker[AsyncSession],
+    *,
+    inbox_id: uuid.UUID,
+    decision: str,
+    payload: dict,
+    model: str,
+) -> None:
+    """Resolve a decision AND actually resume the agent: apply the decision, record the
+    intervention to memory, continue the HITL loop to the next suspension or completion."""
+    from anvil_ai_employee.inbox import InboxStore
+    from anvil_ai_employee.inbox_resume import resume_from_inbox
     from anvil_kb.embed import FastEmbedEmbedder
 
     store = InboxStore(sf)
-    # Fetch before resolving so we have tool_name/tool_args/employee
-    row = await store.get(inbox_id)
-    if row is None:
-        raise ValueError(f"inbox item {inbox_id} not found")
-    await store.resolve(inbox_id, decision=decision, payload=payload)
-    await record_intervention(
-        sf,
-        embedder=FastEmbedEmbedder(),
-        employee=row.employee,
-        tool_name=row.tool_name,
-        decision=decision,
-        payload=payload,
-        tool_args=row.tool_args,
-    )
+    transitioned = await inbox_resolve(sf, inbox_id=inbox_id, decision=decision, payload=payload)
+    if not transitioned:
+        print(f"inbox {str(inbox_id)[:8]} 已处理过或不存在,跳过。")
+        return
+    row = await store.get(inbox_id)  # re-fetch resolved row (carries decision/payload)
+    registry, ctx = _demo_registry()
+    try:
+        out = await resume_from_inbox(
+            row, registry=registry, ctx=ctx, model=model,
+            session_factory=sf, embedder=FastEmbedEmbedder(),
+        )
+    except Exception as exc:  # noqa: BLE001 — decision + memory already persisted
+        print(f"inbox {str(inbox_id)[:8]} → {decision} 已记录;自动恢复失败(可能缺 API key): {exc}")
+        return
+    if out.status == "suspended":
+        new_iid = await store.suspend(employee=row.employee, state=out)
+        print(f"inbox {str(inbox_id)[:8]} → {decision};恢复后再次挂起,新 inbox_id={new_iid}")
+    elif out.status == "done":
+        reply = next((m.get("content") for m in reversed(out.messages)
+                      if m.get("role") == "assistant" and m.get("content")), "")
+        print(f"inbox {str(inbox_id)[:8]} → {decision};Agent 已继续并完成:{reply}")
+    else:
+        print(f"inbox {str(inbox_id)[:8]} → {decision};终态 {out.status}")
 
 
 async def _run_hitl_demo(
@@ -159,18 +203,11 @@ async def _run_hitl_demo(
 ) -> None:
     """Demo: run hitl_run with a high-risk 'shell' tool until it suspends, then persist to inbox."""
     from anvil_code_agent.state import AgentState
-    from anvil_code_agent.tools.base import ToolContext, ToolRegistry, ToolResult, tool
 
     from anvil_ai_employee.hitl import hitl_run, suspend_high
     from anvil_ai_employee.inbox import InboxStore
 
-    @tool(name="shell", description="Execute a shell command.", params={"cmd": {"type": "string"}},
-          required=["cmd"])
-    def shell(args: dict, ctx: ToolContext) -> ToolResult:  # pragma: no cover
-        return ToolResult(content=f"ran: {args['cmd']}", ok=True)
-
-    registry = ToolRegistry([shell])
-    ctx = ToolContext(workdir="/tmp")
+    registry, ctx = _demo_registry()
     state = AgentState.new(system=persona, task=task, workdir="/tmp", max_steps=10)
 
     print(f"[run-hitl] 开始跑 model={model}, employee={employee}")
@@ -308,8 +345,8 @@ def main() -> None:
                 decision = "respond"
             else:
                 p.error(f"unknown inbox subcommand: {args.inbox_cmd}")
-            asyncio.run(inbox_resolve(sf, inbox_id=iid, decision=decision, payload=payload))
-            print(f"inbox {str(iid)[:8]} → {decision} 已记录")
+            asyncio.run(_inbox_decide(sf, inbox_id=iid, decision=decision,
+                                      payload=payload, model="deepseek-chat"))
     elif args.cmd == "run-hitl":
         asyncio.run(_run_hitl_demo(sf, persona=args.persona, task=args.task,
                                    employee=args.employee, model=args.model))
