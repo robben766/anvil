@@ -7,6 +7,7 @@ import asyncio
 import os
 
 from anvil_code_agent.eval.runner import RunResult, pass_rate, solve_task
+from anvil_code_agent.eval.swebench import load_instances, prepare_instance
 from anvil_code_agent.eval.task import Task, load_tasks
 from anvil_gateway import configure
 
@@ -28,6 +29,13 @@ def build_parser() -> argparse.ArgumentParser:
     e.add_argument("--model", default="deepseek-chat")
     e.add_argument("--max-steps", type=int, default=20)
     e.add_argument("--docker", action="store_true", help="run commands in a Docker sandbox")
+
+    w = sub.add_parser("swebench", help="run SWE-bench-format instances (clones repos; live)")
+    w.add_argument("--dataset", required=True, help="jsonl of SWE-bench instances")
+    w.add_argument("--limit", type=int, default=0, help="max instances (0 = all)")
+    w.add_argument("--workdir", default="/tmp/anvil-swebench", help="dir to clone repos into")
+    w.add_argument("--model", default="deepseek-chat")
+    w.add_argument("--max-steps", type=int, default=40)
     return p
 
 
@@ -63,6 +71,26 @@ async def _run(ns: argparse.Namespace) -> int:
         print(f"task={res.task_id} passed={res.passed} steps={res.steps}")
         print(res.diff)
         return 0 if res.passed else 1
+    if ns.command == "swebench":
+        import os
+
+        instances = load_instances(ns.dataset)
+        if ns.limit:
+            instances = instances[: ns.limit]
+        results = []
+        for inst in instances:
+            dest = os.path.join(ns.workdir, inst.instance_id)
+            try:
+                task = prepare_instance(inst, dest)
+                res = await solve_task(task, model=ns.model, max_steps=ns.max_steps)
+                print(f"  {res.task_id}: {'PASS' if res.passed else 'FAIL'} ({res.steps} steps)")
+                results.append(res)
+            except Exception as e:  # noqa: BLE001 — one broken instance must not kill the run
+                print(f"  {inst.instance_id}: ERROR ({e})")
+                results.append(RunResult(task_id=inst.instance_id, passed=False, steps=0, diff=""))
+        rate = pass_rate(results)
+        print(f"SWE-bench pass@1: {rate:.2%} ({sum(r.passed for r in results)}/{len(results)})")
+        return 0
     # eval
     tasks = load_tasks(ns.dataset)
     results = await _run_eval(tasks, model=ns.model, max_steps=ns.max_steps, use_docker=ns.docker)
