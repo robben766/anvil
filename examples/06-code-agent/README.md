@@ -61,6 +61,22 @@ uv run anvil-code-agent swebench --dataset swebench_lite.jsonl --limit 5 --docke
 
 容器内流程:起 `image` 容器(默认 python:3.11,带编译工具)→ `install_cmd` 装这个仓的依赖(editable,这样 agent 改源即时生效)→ agent 在容器内读写/跑测试 → 容器内跑 FAIL_TO_PASS。装不上的实例如实报 `docker setup failed`,与"代码没修对"区分开。**刻意不造官方每实例预构建镜像**——临场容器装依赖,够拿到一个诚实的真实 pass@1。
 
+### 真实跑分(官方 SWE-bench Lite,deepseek-chat 驱动)
+
+挑了 5 道轻依赖仓的真实实例,容器内跑:
+
+| 实例 | 仓 | 结果 | 步数 |
+|---|---|---|---|
+| `pallets__flask-4992` | flask | ✅ PASS | 31 |
+| `pallets__flask-4045` | flask | FAIL | 40 |
+| `psf__requests-3362` | requests | FAIL | 40 |
+| `pylint-dev__pylint-5859` | pylint | FAIL | 22 |
+| `pylint-dev__pylint-7080` | pylint | FAIL | 40 |
+
+**pass@1 = 20%(1/5)。** flask-4992 是真解出来的:agent 读真实 GitHub issue → 在真实 flask 代码库里导航 31 步(repo_map/grep 定位 + edit + run_tests 闭环)→ 改对 → 容器内官方测试转绿。
+
+诚实标注:N=5 小样本、刻意挑了轻依赖仓、中端模型(deepseek-chat)、极简 harness(无 test-time 增强)。这不是冲榜成绩,是一个"自研底座在公认 benchmark 上真能解题"的存在性证明。复现:把官方实例 jsonl(每行加 `image`/`install_cmd`)喂给 `anvil-code-agent swebench --docker`。
+
 ## CA-M6:更深的上下文工程 + 检索
 
 - **摘要压缩 tier**:M3 的 compact 只会截断老工具输出;M6 加一层——超预算时把"中间回合"(系统/任务/最近窗口之外)整段换成一条 LLM 摘要,长任务下 context 不爆且保留要点。关键难点在**不破坏 tool_use 配对**:替换边界对齐到非 tool 消息,孤儿 tool 消息不会出现。
