@@ -84,13 +84,18 @@ _DEFAULT_PERSONA = (
 
 
 def make_strategy(name: str, sf: async_sessionmaker[AsyncSession], model: str):
-    """Pure factory: name ∈ {"none", "mem0"} → concrete MemoryStrategy instance."""
+    """Pure factory: name ∈ {"none", "mem0", "letta"} → concrete MemoryStrategy instance."""
     if name == "none":
         return NoMemoryStrategy()
     if name == "mem0":
         from anvil_kb.embed import FastEmbedEmbedder
 
         return Mem0Strategy(sf, embedder=FastEmbedEmbedder(), model=model)
+    if name == "letta":
+        from anvil_ai_employee.memory.letta import LettaStrategy
+        from anvil_kb.embed import FastEmbedEmbedder
+
+        return LettaStrategy(sf, embedder=FastEmbedEmbedder(), model=model)
     raise ValueError(f"Unknown memory strategy: {name!r}")
 
 
@@ -119,7 +124,7 @@ def main() -> None:
 
     ch = sub.add_parser("chat")
     ch.add_argument("--employee", default="assistant")
-    ch.add_argument("--memory", default="mem0", choices=["none", "mem0"])
+    ch.add_argument("--memory", default="mem0", choices=["none", "mem0", "letta"])
     ch.add_argument("--model", default="deepseek-chat")
     ch.add_argument("--persona", default=_DEFAULT_PERSONA)
 
@@ -142,6 +147,15 @@ def main() -> None:
         from anvil_ai_employee.chat import chat_repl
 
         strategy = make_strategy(args.memory, sf, args.model)
+        paging = None
+        if args.memory == "letta":
+            from anvil_code_agent.harness.context import llm_summarizer
+
+            paging = {
+                "budget": 6000,
+                "warn_ratio": 0.7,
+                "summarizer": llm_summarizer(args.model),
+            }
         asyncio.run(
             chat_repl(
                 persona=args.persona,
@@ -149,5 +163,6 @@ def main() -> None:
                 employee=args.employee,
                 model=args.model,
                 session_store=SessionStore(sf),
+                paging=paging,
             )
         )

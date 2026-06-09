@@ -120,11 +120,15 @@ async def chat_repl(
     model: str,
     session_store: Any = None,
     max_steps: int = 8,
+    paging: dict | None = None,
 ) -> None:
     """Interactive REPL: read user lines, run a turn each, thread history, persist session.
 
     Exits on ``exit``, EOF, or KeyboardInterrupt. When ``session_store`` is given, a session
     is created up front and the threaded history (system-free) is saved after every turn.
+
+    ``paging`` is forwarded to ``run_one_turn`` (Letta self-paging); ``None`` = no paging
+    (M2a behavior preserved when not passed).
     """
     sid = None
     if session_store is not None:
@@ -149,6 +153,7 @@ async def chat_repl(
             session=session,
             model=model,
             max_steps=max_steps,
+            paging=paging,
         )
         print(reply)
         if session_store is not None and sid is not None:
