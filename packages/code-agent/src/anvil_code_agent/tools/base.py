@@ -20,6 +20,7 @@ class ToolContext:
     workdir: str
     timeout: float = 120.0
     max_output: int = 4096
+    executor: Callable[[str], tuple[int, str]] | None = None
 
 
 class Tool:
