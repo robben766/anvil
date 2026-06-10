@@ -126,3 +126,20 @@ async def test_system_prefix_recalls(session_factory):
     strat = Mem0Strategy(session_factory, embedder=StubEmbedder(), model="deepseek-chat")
     prefix = await strat.system_prefix("u1", "我住哪来着")
     assert "北京" in prefix
+
+
+@respx.mock
+async def test_system_prefix_recalls_hitl_interventions(session_factory):
+    """M3 promise: intervention memories (kind="hitl") must reach future context via
+    mem0 recall — past human gatekeeping informs the next similar situation."""
+    store = MemoryStore(session_factory)
+    emb = StubEmbedder().embed_texts(["审批人拒绝了 shell 操作,原因:这台机器不能动"])[0]
+    await store.insert(
+        employee="u1",
+        kind="hitl",
+        content="审批人拒绝了 shell 操作,原因:这台机器不能动",
+        embedding=emb,
+    )
+    strat = Mem0Strategy(session_factory, embedder=StubEmbedder(), model="deepseek-chat")
+    prefix = await strat.system_prefix("u1", "帮我跑个 shell 命令")
+    assert "这台机器不能动" in prefix
