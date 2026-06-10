@@ -89,8 +89,10 @@ class Mem0Strategy:
 
     async def system_prefix(self, employee: str, user_msg: str) -> str:
         qv = self._embedder.embed_query(user_msg)
+        # "hitl" rows are M3 intervention memories ("审批人拒绝了X,原因…") — recalling them
+        # is how past human gatekeeping reaches future context (the M3 design promise).
         hits = await self._vs.knn(
-            employee=employee, kinds=["fact"], query_vec=qv, k=self._recall_k
+            employee=employee, kinds=["fact", "hitl"], query_vec=qv, k=self._recall_k
         )
         if not hits:
             return ""
