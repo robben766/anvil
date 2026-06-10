@@ -22,6 +22,8 @@ class ClaimedJob:
     status: str
     locked_by: str
     started_at: Any
+    goal_id: uuid.UUID | None = None
+    employee: str | None = None
 
 
 async def enqueue(
@@ -30,6 +32,8 @@ async def enqueue(
     skill: str,
     payload: dict[str, Any],
     schedule_id: uuid.UUID | None = None,
+    goal_id: uuid.UUID | None = None,
+    employee: str | None = None,
 ) -> uuid.UUID:
     job_id = uuid.uuid4()
     async with session_factory() as s:
@@ -41,6 +45,8 @@ async def enqueue(
                     skill=skill,
                     payload=payload,
                     status="pending",
+                    goal_id=goal_id,
+                    employee=employee,
                 )
             )
     return job_id
@@ -79,6 +85,8 @@ async def claim_one(
                 status=fresh.status,
                 locked_by=fresh.locked_by,
                 started_at=fresh.started_at,
+                goal_id=fresh.goal_id,
+                employee=fresh.employee,
             )
 
 

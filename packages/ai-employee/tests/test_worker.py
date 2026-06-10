@@ -106,3 +106,32 @@ async def test_run_once_executes_job_to_done(engine, session_factory, monkeypatc
 @respx.mock
 async def test_run_once_no_job_returns_false(engine, session_factory):
     assert await run_once(session_factory, model="deepseek-chat", worker_id="w1") is False
+
+
+@respx.mock
+async def test_worker_runs_researcher_employee(engine, session_factory):
+    """A job tagged employee=researcher must run the researcher persona, not kb_reporter.
+    We assert the agent was driven with the researcher's system prompt by inspecting the
+    request body sent to the gateway."""
+    captured = {}
+
+    def _capture(request):
+        body = json.loads(request.content)
+        captured.setdefault("system", body["messages"][0]["content"])
+        return _assistant_tool_call(
+            "c1",
+            "submit_report",
+            {"markdown": "调研纪要", "covered_until_iso": "2026-06-09T00:00:00"},
+        )
+
+    respx.post(CHAT_URL).mock(side_effect=_capture)
+
+    await enqueue(
+        session_factory,
+        skill="kb_digest",
+        payload={"task": "调研向量检索"},
+        employee="researcher",
+    )
+    ran = await run_once(session_factory, model="deepseek-chat", worker_id="w1")
+    assert ran is True
+    assert "调研员" in captured["system"]  # researcher persona, not kb_reporter

@@ -8,6 +8,7 @@ dependencies = [
     "anvil-obs",
     "anvil-code-agent",
     "anvil-kb",
+    "anvil-guard",
     "sqlalchemy>=2",
     "asyncpg>=0.29",
     "pgvector>=0.3",
@@ -25,6 +26,7 @@ anvil-gateway = { workspace = true }
 anvil-obs = { workspace = true }
 anvil-code-agent = { workspace = true }
 anvil-kb = { workspace = true }
+anvil-guard = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

@@ -89,3 +89,61 @@ async def test_mcp_put_token(session_factory):
     )
     env = await McpTokenStore(session_factory).env_for(employee="alice", connector="gmail")
     assert env == {"GMAIL_TOKEN": "T"}
+
+
+async def test_team_run_creates_goal_and_children(session_factory, respx_mock):
+    import json
+    import uuid
+
+    import httpx
+    from anvil_ai_employee.cli import team_run
+    from anvil_ai_employee.db import GoalRow, JobRow
+    from sqlalchemy import select
+
+    plan = {
+        "subtasks": [
+            {"employee": "researcher", "task": "调研 X"},
+            {"employee": "kb_reporter", "task": "写周报"},
+        ]
+    }
+    respx_mock.route(method="POST", url__regex=r".*chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"role": "assistant", "content": json.dumps(plan)}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+    gid = await team_run(session_factory, objective="调研 X 并写周报", model="deepseek-chat")
+    assert isinstance(gid, uuid.UUID)
+    async with session_factory() as s:
+        goal = (await s.execute(select(GoalRow).where(GoalRow.id == gid))).scalar_one()
+        assert goal.status == "running"
+        children = (await s.execute(select(JobRow).where(JobRow.goal_id == gid))).scalars().all()
+        assert {c.employee for c in children} == {"researcher", "kb_reporter"}
+
+
+async def test_team_status_text_lists_children(session_factory):
+    import uuid
+
+    from anvil_ai_employee.cli import team_status_text
+    from anvil_ai_employee.db import GoalRow, JobRow
+
+    gid = uuid.uuid4()
+    async with session_factory() as s:
+        async with s.begin():
+            s.add(GoalRow(id=gid, objective="g", status="running"))
+            s.add(JobRow(
+                skill="kb_digest", payload={"task": "a"}, status="done",
+                result="r", goal_id=gid, employee="researcher",
+            ))
+            s.add(JobRow(
+                skill="kb_digest", payload={"task": "b"}, status="pending",
+                goal_id=gid, employee="kb_reporter",
+            ))
+    text = await team_status_text(session_factory, goal_id=gid, model="deepseek-chat")
+    assert "researcher" in text and "kb_reporter" in text
+    assert "done" in text and "pending" in text
+    # not all terminal → no synthesis yet
+    assert "最终产出" not in text
